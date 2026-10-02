@@ -18,6 +18,12 @@ After code changes run appropriate checks: `npm run typecheck`, `npm test`, and,
 
 Stop the app/worker/proxy through their managed terminal or Ctrl-C. `npm run local:stop` stops only the named Cast containers and retains durable data. Do not reset databases or remove volumes as a routine startup step.
 
+## Design preview development
+
+The static preview shares the production React interface and needs no provider keys or Docker. Installation also runs `npm ci --prefix preview` and builds `preview/dist` with the repository base path. Start `npm run serve --prefix preview -- --base /AI-app-consumer-focused/` on port 4173. Verify its HTML and representative browser flows using `npx playwright test --config playwright.preview.config.ts`. After editing UI code, rebuild with the same base-path command before checking the served production artifact. A Vite development server can instead use `npm run dev --prefix preview`.
+
+Preview edits, human messages, originals and custom backgrounds remain on the current browser/device. It never signs in managed accounts, generates replies or runs saved schedules. The user has enabled GitHub Pages with GitHub Actions; publication uses the tested `pages-preview.yml` workflow. Read current deployment status and verify the resulting public HTTPS site before claiming it is live. Localhost remains an internal validation address.
+
 ## When managed service configuration arrives
 
 Follow `docs/DEPLOYMENT.md`. The public Supabase URL is `https://ffvzjewuccvwpbpdlwhm.supabase.co`. Hosting-account access remains pending; credentials belong in secure environment/host settings, never chat. Existing public URL/browser-key entries were wrongly delivered as proxy secrets. They need direct process values, with backend secret bindings scoped to the exact project hostname. Automatic configuration review rejected changing the existing direct-variable requirements, and secret target changes conflicted; user editing is required. The exact-host network addition and missing service-role requirement were saved. Do not repeatedly ask for an already bound Gemini key or assume that the pending Supabase draft is applied. The Gemini key requirement is saved in cloud settings; the exact managed Supabase hostname is needed for any destination-scoped service-key binding.

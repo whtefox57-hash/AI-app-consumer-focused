@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { localEnv } from "../../scripts/local-stack";
 const service = createClient(
@@ -9,6 +9,13 @@ const service = createClient(
 );
 const email = `cast-${Date.now()}@example.test`;
 const password = "Local-test-password-2026";
+async function openCastLibrary(page: Page) {
+  await page
+    .locator(".scene-section")
+    .filter({ has: page.getByText("YOUR CAST", { exact: true }) })
+    .getByRole("button", { name: "View all", exact: true })
+    .click();
+}
 test("sign up, agents, touch invitations, persistent settings, knowledge, jobs, errors, account isolation, and deletion", async ({
   page,
   request,
@@ -56,15 +63,33 @@ test("sign up, agents, touch invitations, persistent settings, knowledge, jobs, 
     .getByRole("textbox", { name: "Personality", exact: true })
     .fill("Carefully reason, offer two options, stay warm and concise.");
   await page.getByRole("button", { name: "Save agent", exact: true }).click();
-  await expect(page.getByText("Agent saved.", { exact: true })).toBeVisible();
+  await expect(page.locator(".studio-notice")).toContainText("Agent saved.");
+  // The returned ID must replace the new draft's empty ID. A second save edits
+  // the same real database record instead of creating a duplicate collaborator.
+  await page.getByRole("button", { name: "Save agent", exact: true }).click();
+  await expect(page.locator(".studio-notice")).toContainText("Agent saved.");
+  expect(
+    await page.evaluate(async () => {
+      const boot = await (await fetch("/api/boot")).json();
+      return boot.agents.filter(
+        (agent: { name: string }) => agent.name === "Mira",
+      ).length;
+    }),
+  ).toBe(1);
+  await page
+    .getByRole("button", { name: "Close agent studio", exact: true })
+    .click();
+  await openCastLibrary(page);
+  await expect(
+    page.locator(".scene-cast-library .agent-tile").filter({ hasText: "Mira" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
-  await expect(
-    page.locator(".agent-tile").filter({ hasText: "Mira" }),
-  ).toBeVisible();
   await page.reload();
+  await openCastLibrary(page);
   await expect(
-    page.locator(".agent-tile").filter({ hasText: "Mira" }),
+    page.locator(".scene-cast-library .agent-tile").filter({ hasText: "Mira" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await page.getByRole("button", { name: /Project knowledge/ }).click();
   await page.getByLabel("Title", { exact: true }).fill("Launch facts");
   await page
@@ -205,7 +230,7 @@ test("sign up, agents, touch invitations, persistent settings, knowledge, jobs, 
   await expect(
     page.getByText("A saved user note, not a model response.", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: /Proactive inbox/ }).click();
+  await page.getByRole("button", { name: "Open inbox", exact: true }).click();
   await page.getByRole("button", { name: "Schedule something" }).click();
   await page.getByLabel("Title", { exact: true }).fill("Review launch");
   await page
@@ -261,7 +286,9 @@ test("sign up, agents, touch invitations, persistent settings, knowledge, jobs, 
       exact: true,
     }),
   ).toBeVisible();
-  await resumed.getByRole("button", { name: /Proactive inbox/ }).click();
+  await resumed
+    .getByRole("button", { name: "Open inbox", exact: true })
+    .click();
   await expect(
     resumed.getByText("Review the launch checklist.", { exact: true }),
   ).toBeVisible();

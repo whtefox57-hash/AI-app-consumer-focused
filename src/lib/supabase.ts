@@ -3,10 +3,30 @@ import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { AppError } from "./ai";
 export function configured() {
-  return (
-    !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    !!process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-  );
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!key) return false;
+  try {
+    const url = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    if (
+      (url.protocol !== "https:" && !(local && url.protocol === "http:")) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !["", "/"].includes(url.pathname)
+    )
+      return false;
+    if (/^sb_publishable_[A-Za-z0-9_-]{10,}$/.test(key)) return true;
+    const parts = key.split(".");
+    return (
+      parts.length === 3 &&
+      JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")).role ===
+        "anon"
+    );
+  } catch {
+    return false;
+  }
 }
 export async function db() {
   if (!configured())
@@ -39,7 +59,7 @@ export async function authenticated() {
   return { supabase, user };
 }
 export function admin() {
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
+  if (!configured() || !process.env.SUPABASE_SERVICE_ROLE_KEY)
     throw new AppError(
       503,
       "The account administrator and scheduler are not configured.",

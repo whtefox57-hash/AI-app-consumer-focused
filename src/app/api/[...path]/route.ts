@@ -13,7 +13,16 @@ import {
   capabilities,
   provider,
 } from "@/lib/ai";
-import { agentSchema, projectSchema, jobSchema, id } from "@/lib/validation";
+import {
+  agentSchema,
+  projectSchema,
+  jobSchema,
+  workflowSchema,
+  applyWorkflowSchema,
+  id,
+} from "@/lib/validation";
+import { handleCommunity } from "@/lib/community-server";
+import { settingsPatchSchema } from "@/lib/settings";
 import { presets } from "@/lib/presets";
 import { chunks } from "@/lib/retrieval";
 import { chat, nextRun, runJobs, reserve, finish } from "@/lib/work";
@@ -73,7 +82,7 @@ async function handle(
       return json({
         status: "ok",
         accounts: configured(),
-        ai: ready() && !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+        ai: configured() && ready() && !!process.env.SUPABASE_SERVICE_ROLE_KEY,
         model,
       });
     if (path[0] === "cron") {
@@ -91,6 +100,7 @@ async function handle(
     if (path[0] === "boot" && method === "GET") {
       const tables = [
         "agents",
+        "workflows",
         "projects",
         "memberships",
         "messages",
@@ -128,7 +138,8 @@ async function handle(
         user: { id: user.id, email: user.email },
         profile: data.profiles[0] ?? { settings: {} },
         capabilities: {
-          ai: ready() && !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+          ai:
+            configured() && ready() && !!process.env.SUPABASE_SERVICE_ROLE_KEY,
           speech: capabilities.speech && ready(),
           search: capabilities.search && ready(),
           music: process.env.MUSIC_ENABLED === "true",
@@ -144,6 +155,58 @@ async function handle(
       return json({ ok: true });
     }
     const resource = path[0];
+    if (resource === "community")
+      return json(
+        await handleCommunity({
+          supabase,
+          user,
+          path,
+          method,
+          readBody: () => body(request),
+        }),
+      );
+    if (resource === "workflows") {
+      if (method === "GET")
+        return json(
+          checked(
+            await supabase
+              .from("workflows")
+              .select("*")
+              .order("updated_at", { ascending: false })
+              .limit(100),
+          ),
+        );
+      if (method === "POST" && path[2] === "apply") {
+        const input = applyWorkflowSchema.parse(await body(request));
+        return json({
+          updated: checked(
+            await supabase.rpc("apply_workflow", {
+              p_workflow: id.parse(path[1]),
+              p_agents: input.agentIds,
+              p_all: input.applyToAll,
+            }),
+          ),
+        });
+      }
+      if (method === "POST" || method === "PATCH") {
+        const payload = workflowSchema.parse(await body(request));
+        const query =
+          method === "POST"
+            ? supabase.from("workflows").insert(payload)
+            : supabase
+                .from("workflows")
+                .update(payload)
+                .eq("id", id.parse(path[1]));
+        return json(checked(await query.select("*").single()));
+      }
+      if (method === "DELETE") {
+        checked(
+          await supabase.from("workflows").delete().eq("id", id.parse(path[1])),
+        );
+        return json({ ok: true });
+      }
+      throw new AppError(405, "Method not allowed.");
+    }
     if (["agents", "projects", "jobs"].includes(resource)) {
       const schema =
         resource === "agents"
@@ -153,6 +216,37 @@ async function handle(
             : jobSchema;
       if (method === "POST" || method === "PATCH") {
         const payload = schema.parse(await body(request));
+        if (resource === "agents") {
+          const config = agentSchema.parse(payload).config;
+          if (config.document_ids?.length) {
+            const documents = checked(
+              await supabase
+                .from("documents")
+                .select("id")
+                .in("id", config.document_ids),
+            );
+            if (documents.length !== config.document_ids.length)
+              throw new AppError(403, "Choose files from your own projects.");
+          }
+          if (config.workflow_ids?.length) {
+            const workflows = checked(
+              await supabase
+                .from("workflows")
+                .select("id,kind,enabled")
+                .in("id", config.workflow_ids),
+            );
+            if (
+              workflows.length !== config.workflow_ids.length ||
+              workflows.some(
+                (workflow) => workflow.kind !== "text" || !workflow.enabled,
+              )
+            )
+              throw new AppError(
+                403,
+                "Only enabled text workflows from your library can be assigned to agents.",
+              );
+          }
+        }
         let extra = {};
         if (resource === "jobs") {
           const j = jobSchema.parse(payload);
@@ -219,9 +313,23 @@ async function handle(
         .parse(await body(request));
       if (method === "DELETE")
         checked(await supabase.from("memberships").delete().match(value));
-      else if (method === "POST")
+      else if (method === "POST") {
+        const members = checked(
+          await supabase
+            .from("memberships")
+            .select("agent_id")
+            .eq("project_id", value.project_id),
+        );
+        if (
+          members.length >= 10 &&
+          !members.some((member) => member.agent_id === value.agent_id)
+        )
+          throw new AppError(
+            400,
+            "A project can include up to ten agents. Remove one before adding another.",
+          );
         checked(await supabase.from("memberships").upsert(value));
-      else throw new AppError(405, "Method not allowed.");
+      } else throw new AppError(405, "Method not allowed.");
       return json({ ok: true });
     }
     if (resource === "messages" && method === "GET") {
@@ -506,17 +614,18 @@ async function handle(
       );
     }
     if (resource === "settings" && method === "PATCH") {
-      const settings = z
-        .object({
-          timezone: z.string().max(100),
-          quietStart: z.string().regex(/^\d\d:\d\d$/),
-          quietEnd: z.string().regex(/^\d\d:\d\d$/),
-        })
-        .parse(await body(request));
-      try {
-        new Intl.DateTimeFormat("en", { timeZone: settings.timezone });
-      } catch {
-        throw new AppError(400, "Invalid timezone.");
+      const settings = settingsPatchSchema.parse(await body(request));
+      if (settings.heroAgentId) {
+        const character = checked(
+          await supabase
+            .from("agents")
+            .select("id")
+            .eq("id", settings.heroAgentId)
+            .eq("archived", false)
+            .maybeSingle(),
+        );
+        if (!character)
+          throw new AppError(403, "Choose an active character from your cast.");
       }
       checked(await supabase.rpc("patch_settings", { p_patch: settings }));
       return json({ ok: true });
@@ -560,6 +669,7 @@ async function handle(
       const tables = [
         "profiles",
         "agents",
+        "workflows",
         "projects",
         "memberships",
         "messages",
@@ -569,24 +679,47 @@ async function handle(
         "job_runs",
         "usage",
         "music_feedback",
+        "community_profiles",
+        "community_networks",
+        "community_members",
+        "community_posts",
+        "community_replies",
+        "community_reactions",
+        "community_events",
+        "community_resources",
+        "community_layouts",
+        "community_invitations",
+        "community_connections",
       ];
       const entries = await Promise.all(
         tables.map(async (t) => {
           const rows: unknown[] = [];
           for (let offset = 0; ; offset += 500) {
-            const page = checked(
-              await supabase
-                .from(t)
-                .select("*")
-                .order(
-                  t === "profiles"
-                    ? "user_id"
-                    : t === "memberships"
-                      ? "project_id"
-                      : "id",
-                )
-                .range(offset, offset + 499),
-            );
+            let query = supabase.from(t).select("*");
+            if (t === "community_invitations" || t === "community_connections")
+              query = query.or(
+                `sender_id.eq.${user.id},target_id.eq.${user.id}`,
+              );
+            else if (t === "community_networks")
+              query = query.eq("owner_id", user.id);
+            else if (t.startsWith("community_"))
+              query = query.eq("user_id", user.id);
+            const order =
+              t === "profiles" || t === "community_profiles"
+                ? "user_id"
+                : t === "memberships"
+                  ? "project_id"
+                  : t === "community_members"
+                    ? "network_id"
+                    : t === "community_reactions"
+                      ? "post_id"
+                      : t === "community_layouts"
+                        ? "view"
+                        : "id";
+            query = query.order(order);
+            if (t === "memberships") query = query.order("agent_id");
+            if (t === "community_reactions") query = query.order("kind");
+            const page = checked(await query.range(offset, offset + 499));
             rows.push(...page);
             if (page.length < 500) break;
           }
@@ -610,7 +743,7 @@ async function handle(
           )
         : [];
       return json({
-        version: 2,
+        version: 3,
         exportedAt: new Date().toISOString(),
         data: Object.fromEntries(entries),
         files,

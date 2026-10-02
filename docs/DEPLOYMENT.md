@@ -2,14 +2,34 @@
 
 ## Current dependency boundary
 
-No integrated AppDeploy, managed database, deploy connector, notification service, or host session is available in this workspace. The implementation uses official Gemini and Supabase SDKs with Next.js. The Supabase project URL is supplied and the Gemini key produced real synthetic text responses. Supabase public-value delivery, backend/migration access, billed-project confirmation and a hosting account remain pending. There is no deployed app URL.
+The connected application uses official Gemini and Supabase SDKs with Next.js. The Supabase project URL is supplied and the Gemini key produced real synthetic text responses. Supabase public-value delivery, backend/migration access, billed-project confirmation, and a Node hosting account remain pending. There is no verified public connected-app URL.
+
+A native GitHub integration can push source and read repository metadata. The owner has enabled GitHub Pages, and its official API now confirms `build_type: workflow`, HTTPS enforcement, and the site URL `https://whtefox57-hash.github.io/AI-app-consumer-focused/`. The first static-preview artifact must still be deployed and verified there. No Vercel session, host token, or managed deployment connector is available.
 
 The cloud settings draft contains required domains and a Gemini secret requirement. Applying/publishing cloud environment settings is a product action; saving the draft does not apply network rules, create secret values, start services, publish source, or deploy the app. The complete source and actual screenshot are published on the connected GitHub repository's `main` branch. Importing it into a hosting account has not been performed. The filesystem and dependency-backed typecheck/unit tests were verified in a new cloud instance after Done; running processes must restart.
 
+## Static design preview
+
+`preview/` builds the shared React interface with Vite and a browser-local adapter. It serves static assets without a Next.js server, Supabase account, or Gemini key. The connected application's cookie authentication and request-dependent API handlers remain in the Node application; they cannot run on GitHub Pages.
+
+The preview is explicitly labeled. Agent, project, note, workflow, community, and map edits are local to the visitor's browser. Its settings and human messages use browser storage; original files use IndexedDB. It does not fabricate model responses, create signed-in accounts, run scheduled work, or connect live voice and external services. TXT and Markdown can be read locally; PDFs are preserved as original files and labeled as requiring connected-app extraction. Export links for those files are local blob URLs, not cloud download links or cross-device backups.
+
+This repository already has [Pages settings](https://github.com/whtefox57-hash/AI-app-consumer-focused/settings/pages) configured with **Source → GitHub Actions**. For a different repository, the owner must enable that source first; the workflow token cannot enable a disabled site. The checked-in `.github/workflows/pages-preview.yml` builds on relevant `main` pushes and can be rerun manually from Actions. It checks the existing Pages configuration, tests the built preview in Chromium at the project base path, uploads only `preview/dist`, and deploys through the standard `github-pages` environment. Its workflow token has deployment permissions.
+
+The workflow installs both package lockfiles and builds with the repository base path:
+
+```sh
+npm ci --no-audit --no-fund
+npm ci --prefix preview --no-audit --no-fund
+npm run build --prefix preview -- --base /AI-app-consumer-focused/
+```
+
+The shared asset helper uses the Vite base path so images and bundles resolve under the project subdirectory. Upload only `preview/dist`; do not upload the working tree, environment files, backend scripts, database fixtures, or private test artifacts. After deployment, use the URL returned by `actions/deploy-pages` and verify navigation, edits after refresh, uploads, map controls, and mobile layout there. A successful static deployment verifies this preview, not hosted AI or database acceptance.
+
 ## Managed backend
 
-1. Create a Supabase project. Obtain the project URL and public publishable/anon key from project settings. Obtain the backend service-role key through secure project settings. Only the URL and public key may reach the browser.
-2. Apply all five files in `supabase/migrations` in filename order. For a new project use the Supabase SQL editor, or the documented CLI flow: `supabase link --project-ref YOUR_PROJECT_REF` followed by `supabase db push`. Authenticate the CLI through its supported flow and keep passwords out of shell history and chat. In this cloud set `SUPABASE_HOME=/workspace/.cache/supabase` if the CLI needs a writable home. The custom local Docker stack does not use the CLI's local reset command.
+1. Use the existing Supabase project `ffvzjewuccvwpbpdlwhm`. Obtain its public project URL and publishable/anon key from project settings. Obtain the backend service-role key through secure project settings. Only the URL and public key may reach the browser.
+2. Apply every file in `supabase/migrations` in filename order, including the character, workflow, community, and settings updates. For a new project use the Supabase SQL editor, or the documented CLI flow: `supabase link --project-ref YOUR_PROJECT_REF` followed by `supabase db push`. Authenticate the CLI through its supported flow and keep passwords out of shell history and chat. In this cloud set `SUPABASE_HOME=/workspace/.cache/supabase` if the CLI needs a writable home. The custom local Docker stack does not use the CLI's local reset command.
 3. Verify the private `cast-private` bucket and ownership policies. Do not make the bucket public. Do not remove table policies to resolve an auth error.
 4. Set Supabase Auth's site URL to the production HTTPS origin. Add the exact `/auth/callback` redirect for that origin. Review the signup/recovery email templates and configure a real transactional SMTP provider. Local Mailpit and auto-confirmation are test settings; they do not verify production email delivery.
 5. Sign up the owner's account and put its Supabase user UUID in `OWNER_USER_ID`. Owner status is enforced on the backend; it is not a client preference.
@@ -65,4 +85,4 @@ Then deploy with the host's supported Next.js flow and complete [the live checks
 
 Redeploy with `npm ci`, required schema migrations, public build variables, `npm run typecheck`, `npm test`, and `npm run build`. Preserve managed data and storage. Apply a compatible migration before code that needs it; do not use destructive reset commands on hosted data.
 
-For a fresh empty managed project, `supabase/setup.sql` combines all five ordered migrations into one transaction for the Supabase SQL editor. Do not run it against a project where these migrations have already been applied; use incremental migration deployment there. A service-role API key alone cannot execute these schema migrations.
+For a fresh empty managed project, `supabase/setup.sql` is the SQL-editor convenience bundle. Confirm it contains every current ordered migration before using it; regenerate it after schema additions. Do not run it against a project where these migrations have already been applied; use incremental migration deployment there. A service-role API key alone cannot execute these schema migrations.

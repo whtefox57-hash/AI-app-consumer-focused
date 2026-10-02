@@ -21,11 +21,36 @@ import {
   PanelLeft,
   Download,
   Shield,
+  Home,
+  MessageCircle,
+  Users,
+  Map as MapIcon,
+  Globe,
+  Paperclip,
+  Puzzle,
+  CalendarDays,
+  Sparkles,
+  Image as ImageIcon,
+  Heart,
+  Mic,
+  ChevronRight,
 } from "lucide-react";
-import { api, browserDb } from "@/lib/browser-db";
+import { api, browserDb, setDesignPreview } from "@/lib/browser-db";
 import { presets, voices } from "@/lib/presets";
 import type { Agent, Boot, Job, Project } from "@/lib/types";
 import { Voice } from "./voice";
+import { AgentStudio } from "./agent-studio";
+import { WorkflowStudio } from "./workflow-studio";
+import { CommunityView } from "./community";
+import WorldMap from "./world-map";
+import { assetPath } from "@/lib/assets";
+import {
+  getBackground,
+  removeBackground,
+  saveBackground,
+  type CustomBackground,
+} from "@/lib/background-store";
+import "./scene.css";
 function Avatar({
   agent,
   size = "normal",
@@ -48,30 +73,21 @@ function Avatar({
       {url ? (
         <img src={url} alt="" />
       ) : (
-        <svg viewBox="0 0 64 64">
-          <ellipse
-            cx="32"
-            cy="32"
-            rx="22"
-            ry="24"
-            fill="currentColor"
-            opacity=".35"
-          />
-          <path d="M14 23Q32 3 50 23L45 17Q32 10 19 17Z" fill="currentColor" />
-          <path
-            d="M23 30h3m12 0h3"
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
-          />
-          <path
-            d="M26 42Q32 47 38 42"
-            stroke="currentColor"
-            strokeWidth="2"
-            fill="none"
-          />
-          <path d="M16 60Q32 42 48 60" fill="currentColor" opacity=".6" />
-        </svg>
+        <span className="pet-avatar">
+          {(
+            {
+              violet: "🐈",
+              blue: "🐶",
+              rose: "🐰",
+              sage: "🐼",
+              amber: "🦊",
+              slate: "🤖",
+            } as Record<string, string>
+          )[agent.avatar] ||
+            (/\p{Extended_Pictographic}/u.test(agent.avatar)
+              ? agent.avatar
+              : "🐈")}
+        </span>
       )}
     </span>
   );
@@ -101,8 +117,101 @@ function Dialog({
     </dialog>
   );
 }
-export function Cast({ configured }: { configured: boolean }) {
+export function Cast({
+  configured,
+  designPreview = false,
+}: {
+  configured: boolean;
+  designPreview?: boolean;
+}) {
   const [data, setData] = useState<Boot | null>(null);
+  const [view, setView] = useState<"chat" | "feed" | "networks" | "map">(
+    "chat",
+  );
+  const [libraryTab, setLibraryTab] = useState<"files" | "plugins">("files");
+  const [customBackground, setCustomBackground] = useState<{
+    url: string;
+    name: string;
+    type: "image" | "video";
+  } | null>(null);
+  const backgroundUrl = useRef("");
+  const restoredView = useRef("");
+  const [petVisiting, setPetVisiting] = useState(false);
+  const [greetingIndex, setGreetingIndex] = useState(0);
+  const [pluginInfo, setPluginInfo] = useState("");
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  function installBackground(value: CustomBackground | null) {
+    if (backgroundUrl.current) URL.revokeObjectURL(backgroundUrl.current);
+    backgroundUrl.current = value ? URL.createObjectURL(value.blob) : "";
+    setCustomBackground(
+      value
+        ? { url: backgroundUrl.current, name: value.name, type: value.type }
+        : null,
+    );
+  }
+  async function saveSettings(patch: Record<string, unknown>) {
+    await api("settings", { method: "PATCH", body: JSON.stringify(patch) });
+    setData((old) =>
+      old
+        ? {
+            ...old,
+            profile: {
+              ...old.profile,
+              settings: { ...old.profile.settings, ...patch },
+            },
+          }
+        : old,
+    );
+  }
+  function navigate(next: "chat" | "feed" | "networks" | "map") {
+    setView(next);
+    setMenu(false);
+    setVoiceOpen(false);
+    void saveSettings({ activeView: next }).catch((e) => setError(e.message));
+  }
+  useEffect(() => {
+    const uid = data?.user.id;
+    if (!uid) return;
+    if (restoredView.current !== uid) {
+      restoredView.current = uid;
+      const saved = data.profile.settings.activeView;
+      if (saved === "feed" || saved === "networks" || saved === "map")
+        setView(saved);
+    }
+    let live = true;
+    void getBackground(uid)
+      .then((value) => {
+        if (live) installBackground(value || null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+      if (backgroundUrl.current) URL.revokeObjectURL(backgroundUrl.current);
+      backgroundUrl.current = "";
+    };
+  }, [data?.user.id]);
+  useEffect(() => {
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (reduced) return;
+    const timer = setInterval(
+      () => setGreetingIndex((i) => (i + 1) % 4),
+      45000,
+    );
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (
+      !data?.profile.settings.catVisits ||
+      view === "chat" ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    const timer = setInterval(() => setPetVisiting(true), 60000);
+    return () => clearInterval(timer);
+  }, [data?.profile.settings.catVisits, view]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -116,6 +225,7 @@ export function Cast({ configured }: { configured: boolean }) {
   const [partial, setPartial] = useState<Record<string, string>>({});
   const [menu, setMenu] = useState(false);
   const [archived, setArchived] = useState(false);
+  const [archivedAgents, setArchivedAgents] = useState(false);
   const [authMode, setAuthMode] = useState("signin");
   const [music, setMusic] = useState<
     {
@@ -172,9 +282,10 @@ export function Cast({ configured }: { configured: boolean }) {
       setError(
         "This sign-in link could not be verified. Request a new link and try again.",
       );
-    if (configured) void reload();
+    setDesignPreview(designPreview);
+    if (configured || designPreview) void reload();
     else setLoading(false);
-  }, [configured]);
+  }, [configured, designPreview]);
   useEffect(() => {
     if (data && selected)
       void api("selection", {
@@ -248,6 +359,21 @@ export function Cast({ configured }: { configured: boolean }) {
     abort.current = new AbortController();
     try {
       setPartial({});
+      if (designPreview) {
+        await api("preview-message", {
+          method: "POST",
+          body: JSON.stringify({
+            projectId: selected,
+            text: value,
+            requestId: turn.current,
+            agentIds: participants,
+          }),
+        });
+        await reload();
+        throw new Error(
+          "Your message is saved in this design preview. Real AI replies need the connected app; no answer has been simulated.",
+        );
+      }
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -326,6 +452,12 @@ export function Cast({ configured }: { configured: boolean }) {
     );
   }
   async function membership(agentId: string, remove = false) {
+    if (!remove && !members.includes(agentId) && active.length >= 10) {
+      setError(
+        "A chat can contain up to 10 agents. Remove one before adding another.",
+      );
+      return;
+    }
     await action(() =>
       api("memberships", {
         method: remove ? "DELETE" : "POST",
@@ -540,519 +672,1139 @@ export function Cast({ configured }: { configured: boolean }) {
           <small>
             Private by default. You choose what each agent can access.
           </small>
+          <a className="preview-entry" href={assetPath("preview")}>
+            Explore the new design <ChevronRight size={16} />
+          </a>
         </form>
         {alert}
       </main>
     );
   return (
-    <main className="app">
-      <aside className={`sidebar ${menu ? "open" : ""}`}>
-        <a className="wordmark" href="/">
-          cast<span>✳︎</span>
-        </a>
-        <div className="side-section">
-          <span className="eyebrow">YOUR SPACE</span>
-          <button
-            className={panel === "inbox" ? "nav active" : "nav"}
-            onClick={() => setPanel("inbox")}
-          >
-            <Inbox size={18} />
-            Proactive inbox
-            <span className="count">
-              {data.inbox.filter((i) => !i.read).length}
-            </span>
-          </button>
-          {data.capabilities.music && (
-            <button className="nav" onClick={() => setPanel("music")}>
-              <Headphones size={18} />A little music
-            </button>
-          )}
-        </div>
-        <div className="side-section projects">
-          <div className="section-title">
-            <span className="eyebrow">
-              {archived ? "ARCHIVED PROJECTS" : "PROJECTS"}
-            </span>
-            <button
-              onClick={() => setPanel("project-new")}
-              aria-label="Create project"
-            >
-              <Plus size={16} />
-            </button>
-          </div>
-          {data.projects
-            .filter((p) => p.archived === archived)
-            .map((p) => (
-              <button
-                key={p.id}
-                className={`nav ${selected === p.id ? "active" : ""}`}
-                onClick={() => {
-                  setSelected(p.id);
-                  setMenu(false);
-                }}
-              >
-                <Folder size={17} />
-                <span>{p.name}</span>
-              </button>
-            ))}
-          {!data.projects.some((p) => p.archived === archived) && (
-            <p className="muted small">A place for your next idea.</p>
-          )}
-          <button className="small-link" onClick={() => setArchived(!archived)}>
-            <Archive size={14} />
-            {archived ? "Active projects" : "View archive"}
-          </button>
-        </div>
-        <div className="sidebar-foot">
-          <div className="private-note">
-            <Shield size={15} />
-            <span>Your conversations are private.</span>
-          </div>
-          <button className="nav" onClick={() => setPanel("settings")}>
-            <Settings size={18} />
-            Settings & usage
-          </button>
-          <button className="profile" onClick={() => setPanel("settings")}>
-            <span className="initial">
-              {data.user.email?.[0]?.toUpperCase()}
-            </span>
-            <span>
-              {data.user.email}
-              <small>Personal workspace</small>
-            </span>
-            <ChevronDown size={14} />
-          </button>
-        </div>
-      </aside>
-      <section className="workspace">
-        <header className="topbar">
-          <button
-            className="mobile-menu"
-            aria-label="Open navigation"
-            onClick={() => setMenu(!menu)}
-          >
-            <PanelLeft size={20} />
-          </button>
-          <div className="breadcrumb">
-            Your space <span>/</span>{" "}
-            <b>{project?.name || "A new beginning"}</b>
-          </div>
-          <div className="top-actions">
-            <span className="private-badge">
-              <span />
-              PRIVATE
-            </span>
-            <button aria-label="Open inbox" onClick={() => setPanel("inbox")}>
-              <Inbox size={19} />
-            </button>
-            <button
-              aria-label="Project options"
-              onClick={() => setPanel("project-options")}
-              disabled={!project}
-            >
-              <MoreHorizontal size={21} />
-            </button>
-          </div>
-        </header>
-        <div className="shelf">
-          <div className="shelf-title">
-            <span className="eyebrow">YOUR CAST</span>
-            <span>Different minds. Shared possibilities.</span>
-            <button onClick={createAgent}>
-              <Plus size={14} /> Create agent
-            </button>
-          </div>
-          <div className="agent-row">
-            {agents.map((a) => (
-              <div
-                draggable
-                key={a.id}
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", a.id)}
-                className="agent-tile"
-              >
-                <button
-                  className="agent-face"
-                  aria-label={`Talk with ${a.name}`}
-                  onClick={() =>
-                    void action(async () => {
-                      if (!project) throw new Error("Create a project first.");
-                      if (
-                        a.project_scope.length &&
-                        !a.project_scope.includes(selected)
-                      )
-                        throw new Error(
-                          "This agent is restricted to other projects. Edit its access scope first.",
-                        );
-                      if (!members.includes(a.id))
-                        await api("memberships", {
-                          method: "POST",
-                          body: JSON.stringify({
-                            project_id: selected,
-                            agent_id: a.id,
-                          }),
-                        });
-                      setParticipants([a.id]);
-                    })
-                  }
-                >
-                  <Avatar agent={a} />
-                </button>
-                <button
-                  className="agent-name"
-                  aria-label={`Edit ${a.name}`}
-                  onClick={() => {
-                    setEdit(a);
-                    setPanel("agent");
-                  }}
-                >
-                  <b>{a.name}</b>
-                </button>
-                <span>AI · {a.expertise.split(",")[0].slice(0, 23)}</span>
-              </div>
-            ))}
-            <button className="agent-tile add-agent" onClick={createAgent}>
-              <span className="avatar">
-                <Plus size={25} />
-              </span>
-              <b>Make someone new</b>
-              <span>Your idea, their perspective.</span>
-            </button>
-          </div>
-        </div>
-        <div
-          className="project-strip"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            const agent = e.dataTransfer.getData("text/plain");
-            if (project && agents.some((a) => a.id === agent))
-              void membership(agent);
-          }}
-        >
-          <div>
-            <span className="eyebrow">IN THIS PROJECT</span>
-            <div className="participants">
-              {active.map((a) => (
-                <button
-                  key={a.id}
-                  className={`participant ${participants.includes(a.id) ? "selected" : ""}`}
-                  onClick={() =>
-                    setParticipants((old) =>
-                      old.includes(a.id)
-                        ? old.filter((v) => v !== a.id)
-                        : old.length < 3
-                          ? [...old, a.id]
-                          : old,
+    <main
+      className={`app scene-app scene-${view} ${messages.length ? "scene-has-messages" : ""}`}
+    >
+      {view === "chat" && (
+        <div className="scene-backdrop" aria-hidden="true">
+          {data.profile.settings.backgroundScene === "custom" &&
+          customBackground?.type === "video" ? (
+            <video
+              src={customBackground.url}
+              autoPlay={
+                !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              }
+              muted
+              loop
+              playsInline
+              controls={
+                window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              }
+              poster={assetPath("scenes/home.png")}
+            />
+          ) : (
+            <img
+              src={
+                data.profile.settings.backgroundScene === "custom" &&
+                customBackground?.type === "image"
+                  ? customBackground.url
+                  : assetPath(
+                      data.profile.settings.backgroundScene === "network"
+                        ? "scenes/network.png"
+                        : "scenes/home.png",
                     )
-                  }
-                  aria-pressed={participants.includes(a.id)}
-                  title="Select responding agent"
-                >
-                  <Avatar agent={a} size="mini" />
-                  {a.name}
-                  {participants.includes(a.id) && <Check size={12} />}
-                </button>
-              ))}
+              }
+              alt=""
+              onError={() =>
+                setError(
+                  "This background could not be displayed. Choose another file in Scene settings.",
+                )
+              }
+            />
+          )}
+        </div>
+      )}
+      {view === "chat" ? (
+        <aside className={`sidebar scene-sidebar ${menu ? "open" : ""}`}>
+          <div className="scene-brand">
+            <button
+              onClick={() => navigate("chat")}
+              className="wordmark"
+              aria-label="Cast chat"
+            >
+              cast<span>✳</span>
+            </button>
+            <button aria-label="Open inbox" onClick={() => setPanel("inbox")}>
+              <Inbox size={16} />
+            </button>
+          </div>
+          <div className="scene-projects">
+            <div className="section-title">
+              <b>Projects</b>
               <button
-                className="invite"
-                disabled={!project || project.archived}
-                onClick={() => setPanel("invite")}
+                aria-label="Create project"
+                onClick={() => setPanel("project-new")}
               >
                 <Plus size={15} />
-                Invite
               </button>
             </div>
+            {data.projects
+              .filter((p) => p.archived === archived)
+              .map((p, i) => (
+                <button
+                  key={p.id}
+                  className={`nav ${selected === p.id ? "active" : ""}`}
+                  onClick={() => {
+                    setSelected(p.id);
+                    setMenu(false);
+                  }}
+                >
+                  <span className={`project-color color-${i % 6}`} />
+                  <span>{p.name}</span>
+                </button>
+              ))}
+            <button
+              className="scene-archive"
+              onClick={() => setArchived(!archived)}
+            >
+              <Archive size={12} />
+              {archived ? "Active projects" : "View archive"}
+            </button>
           </div>
-          <button
-            className="knowledge-button"
-            onClick={() => setPanel("knowledge")}
-            disabled={!project}
-          >
-            <FileText size={16} />
-            Project knowledge
-            <span>
-              {data.documents.filter((d) => d.project_id === selected).length}
-            </span>
-          </button>
-        </div>
-        <div className="conversation">
-          <div className="conversation-inner">
-            {messages.length >= 100 && (
-              <button
-                className="small-link"
-                onClick={() =>
-                  void api<Boot["messages"]>(
-                    `messages?projectId=${selected}&before=${encodeURIComponent(messages[0].created_at)}`,
-                  )
-                    .then((rows) => {
-                      if (!rows.length)
-                        setNotice(
-                          "You’re at the beginning of this conversation.",
-                        );
-                      setData((old) =>
-                        old
-                          ? {
-                              ...old,
-                              messages: [
-                                ...old.messages,
-                                ...rows.filter(
-                                  (m) =>
-                                    !old.messages.some((o) => o.id === m.id),
-                                ),
-                              ],
-                            }
-                          : old,
-                      );
-                    })
-                    .catch((e) => setError(e.message))
-                }
-              >
-                Load earlier messages
+          <div className="scene-section">
+            <div className="section-title">
+              <b>YOUR CAST</b>
+              <button onClick={() => setPanel("cast-library")}>
+                View all <ChevronRight size={12} />
               </button>
-            )}
-            {!messages.length ? (
-              <div className="welcome">
-                <div className="spark">✳︎</div>
-                <span className="eyebrow">ROOM TO THINK</span>
-                <h1>
-                  {project
-                    ? "What’s on your mind?"
-                    : "Make room for your next idea."}
-                </h1>
-                <p>
-                  {project
-                    ? "Bring a question, a half-formed idea, or something you want to untangle. Your cast is here to help."
-                    : "Create a project, invite an agent, and begin a conversation that stays with you."}
-                </p>
-                {!project ? (
+            </div>
+            <div className="scene-cast-row">
+              {agents.slice(0, 6).map((a) => (
+                <div
+                  draggable
+                  key={a.id}
+                  className="agent-tile"
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("application/x-cast-agent", a.id);
+                    e.dataTransfer.setData("text/plain", a.id);
+                  }}
+                >
                   <button
-                    className="primary"
-                    onClick={() => setPanel("project-new")}
+                    className="agent-face"
+                    aria-label={`Edit ${a.name}`}
+                    onClick={() => {
+                      setEdit(a);
+                      setPanel("agent");
+                    }}
                   >
-                    <Plus size={16} />
-                    Create your first project
+                    <Avatar agent={a} />
                   </button>
-                ) : (
-                  <div className="suggestions">
-                    {[
-                      "Help me think through an idea",
-                      "Turn my goal into a plan",
-                      "Look at this from a new angle",
-                    ].map((s) => (
-                      <button key={s} onClick={() => setText(s)}>
-                        {s}
-                        <ArrowUp size={15} />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              messages.map((m) => {
-                const agent = data.agents.find((a) => a.id === m.agent_id);
-                return (
-                  <article className={`message ${m.role}`} key={m.id}>
-                    {m.role === "assistant" && agent ? (
-                      <Avatar agent={agent} size="small" />
-                    ) : (
-                      <span className="user-avatar">
-                        {data.user.email?.[0]?.toUpperCase()}
-                      </span>
-                    )}
-                    <div className="message-body">
-                      <div className="message-meta">
-                        <b>
-                          {m.role === "assistant"
-                            ? agent?.name || "Archived AI agent"
-                            : "You"}
-                        </b>
-                        {m.role === "assistant" && <span>AI</span>}
-                        <time>
-                          {new Date(m.created_at).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </time>
+                  <button
+                    className="agent-name"
+                    aria-label={`Edit ${a.name} details`}
+                    onClick={() => {
+                      setEdit(a);
+                      setPanel("agent");
+                    }}
+                  >
+                    {a.name
+                      .replace("Legal researcher", "Legal")
+                      .replace("Product engineer", "Builder")}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              className="scene-create-agent"
+              aria-label="Create agent"
+              onClick={createAgent}
+            >
+              <Plus size={12} />
+              Create agent
+            </button>
+          </div>
+          <div className="scene-section">
+            <div className="section-title">
+              <b>Plugins</b>
+              <button
+                onClick={() => {
+                  setLibraryTab("plugins");
+                  setPanel("library");
+                }}
+              >
+                View all <ChevronRight size={12} />
+              </button>
+            </div>
+            <div className="scene-plugin-row">
+              {[
+                { id: "Gmail", icon: "M", color: "#e2473c" },
+                { id: "Notion", icon: "N", color: "#283231" },
+                { id: "Slack", icon: "✣", color: "#3ca588" },
+                { id: "Drive", icon: "△", color: "#4285f4" },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  draggable
+                  onDragStart={(e) =>
+                    e.dataTransfer.setData("application/x-cast-plugin", p.id)
+                  }
+                  onClick={() => setPluginInfo(p.id)}
+                  aria-label={`Configure ${p.id}`}
+                >
+                  <span style={{ color: p.color }}>{p.icon}</span>
+                  <small>{p.id}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+          <button className="scene-side-link" onClick={() => setPanel("inbox")}>
+            <CalendarDays size={14} />
+            Schedule <ChevronDown size={12} />
+            {data.inbox.filter((i) => !i.read).length > 0 && (
+              <span className="count">
+                {data.inbox.filter((i) => !i.read).length}
+              </span>
+            )}
+          </button>
+          <button
+            className="scene-side-link"
+            onClick={() => setPanel("workflows")}
+          >
+            <Sparkles size={14} />
+            Templates & workflows <ChevronRight size={12} />
+          </button>
+          <div className="scene-side-pages">
+            <button onClick={() => navigate("feed")}>
+              <Home size={15} />
+              Home feed
+            </button>
+            <button onClick={() => navigate("networks")}>
+              <Users size={15} />
+              Networks
+            </button>
+            <button onClick={() => navigate("map")}>
+              <MapIcon size={15} />
+              World map
+            </button>
+          </div>
+          <div className="sidebar-foot">
+            <button
+              className="nav"
+              aria-label="Settings & usage"
+              onClick={() => setPanel("settings")}
+            >
+              <Settings size={15} />
+              <span>Settings & usage</span>
+            </button>
+            <button className="profile" onClick={() => setPanel("settings")}>
+              <span className="initial">
+                {designPreview ? "C" : data.user.email?.[0]?.toUpperCase()}
+              </span>
+              <span>
+                {designPreview ? "Your workspace" : data.user.email}
+                <small>
+                  {designPreview ? "Design preview" : "Personal workspace"}
+                </small>
+              </span>
+            </button>
+          </div>
+        </aside>
+      ) : (
+        <aside className="scene-rail">
+          <button
+            className="rail-logo"
+            onClick={() => navigate("chat")}
+            aria-label="Cast chat"
+          >
+            ✳
+          </button>
+          {[
+            { id: "feed", label: "Home feed", icon: Home },
+            { id: "chat", label: "Chat", icon: MessageCircle },
+            { id: "networks", label: "Networks", icon: Users },
+            { id: "map", label: "World map", icon: MapIcon },
+          ].map((n) => (
+            <button
+              key={n.id}
+              className={view === n.id ? "selected" : ""}
+              aria-label={n.label}
+              title={n.label}
+              onClick={() => navigate(n.id as typeof view)}
+            >
+              <n.icon size={19} />
+              <small>
+                {n.label.replace("World ", "").replace(" feed", "")}
+              </small>
+            </button>
+          ))}
+          <button
+            aria-label="Templates and workflows"
+            title="Templates and workflows"
+            onClick={() => setPanel("workflows")}
+          >
+            <Sparkles size={19} />
+          </button>
+          <button
+            aria-label="Open inbox"
+            title="Open inbox"
+            onClick={() => setPanel("inbox")}
+          >
+            <Inbox size={19} />
+          </button>
+          <button
+            className="rail-settings"
+            aria-label="Settings & usage"
+            onClick={() => setPanel("settings")}
+          >
+            <Settings size={19} />
+          </button>
+        </aside>
+      )}
+      {view === "chat" ? (
+        <section
+          className="workspace scene-workspace"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDropActive(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node))
+              setDropActive(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDropActive(false);
+            const plugin = e.dataTransfer.getData("application/x-cast-plugin");
+            if (plugin) {
+              setPluginInfo(plugin);
+              return;
+            }
+            const id =
+              e.dataTransfer.getData("application/x-cast-agent") ||
+              e.dataTransfer.getData("text/plain");
+            if (project && agents.some((a) => a.id === id)) void membership(id);
+          }}
+        >
+          <header className="scene-topbar">
+            <button
+              className="mobile-menu"
+              aria-label="Open navigation"
+              onClick={() => setMenu(!menu)}
+            >
+              <PanelLeft size={19} />
+            </button>
+            <span className="scene-project-caption">{project?.name}</span>
+            <div>
+              <button
+                className="scene-customize"
+                aria-label="Customize scene"
+                onClick={() => setPanel("scene")}
+              >
+                <ImageIcon size={15} />
+                <span>Make it yours</span>
+              </button>
+              <button
+                aria-label="Project options"
+                onClick={() => setPanel("project-options")}
+                disabled={!project}
+              >
+                <MoreHorizontal size={20} />
+              </button>
+            </div>
+          </header>
+          {dropActive && (
+            <div className="scene-drop-hint">
+              <Plus size={22} />
+              Drop an agent into this chat
+            </div>
+          )}
+          <div className="conversation">
+            <div className="conversation-inner">
+              {messages.length >= 100 && (
+                <button
+                  className="small-link"
+                  onClick={() =>
+                    void api<Boot["messages"]>(
+                      `messages?projectId=${selected}&before=${encodeURIComponent(messages[0].created_at)}`,
+                    )
+                      .then((rows) => {
+                        if (!rows.length)
+                          setNotice(
+                            "You’re at the beginning of this conversation.",
+                          );
+                        setData((old) =>
+                          old
+                            ? {
+                                ...old,
+                                messages: [
+                                  ...old.messages,
+                                  ...rows.filter(
+                                    (m) =>
+                                      !old.messages.some((o) => o.id === m.id),
+                                  ),
+                                ],
+                              }
+                            : old,
+                        );
+                      })
+                      .catch((e) => setError(e.message))
+                  }
+                >
+                  Load earlier messages
+                </button>
+              )}
+              {!messages.length ? (
+                <div className="mascot-scene">
+                  {(data.profile.settings.heroCharacter || "cat") !==
+                    "none" && (
+                    <>
+                      <div className="mascot-greeting">
+                        {
+                          [
+                            "What can I help you with today?",
+                            project
+                              ? `A little progress on ${project.name}?`
+                              : "Where should we start today?",
+                            "Your ideas called. They’d like a little company.",
+                            "One small step. I’m right here.",
+                          ][greetingIndex]
+                        }{" "}
+                        <Heart size={18} />
                       </div>
-                      <div className="message-text">{m.content}</div>
-                      {m.sources?.length > 0 && (
-                        <div className="sources">
-                          {m.sources.map((s) =>
-                            s.url ? (
-                              <a
-                                href={s.url}
-                                key={s.id}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                {s.title} ↗
-                              </a>
-                            ) : (
-                              <details key={s.id}>
-                                <summary>
-                                  {s.title} · source {s.id.split(":").at(-1)}
-                                </summary>
-                                {s.snippet}
-                              </details>
-                            ),
+                      {data.profile.settings.heroCharacter === "agent" ? (
+                        <div className="hero-agent">
+                          <Avatar
+                            agent={
+                              agents.find(
+                                (a) =>
+                                  a.id === data.profile.settings.heroAgentId,
+                              ) ||
+                              active[0] ||
+                              agents[0] || { name: "Your cast", avatar: "blue" }
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <img
+                          className="hero-kitten"
+                          src={assetPath("scenes/cat.png")}
+                          alt="A friendly tabby kitten walking across your desk"
+                          draggable={false}
+                        />
+                      )}
+                    </>
+                  )}
+                  {!project && (
+                    <button
+                      className="primary first-project"
+                      onClick={() => setPanel("project-new")}
+                    >
+                      <Plus size={16} />
+                      Create your first project
+                    </button>
+                  )}
+                </div>
+              ) : (
+                messages.map((m) => {
+                  const agent = data.agents.find((a) => a.id === m.agent_id);
+                  return (
+                    <article className={`message ${m.role}`} key={m.id}>
+                      {m.role === "assistant" && agent ? (
+                        <Avatar agent={agent} size="small" />
+                      ) : (
+                        <span className="user-avatar">
+                          {data.user.email?.[0]?.toUpperCase()}
+                        </span>
+                      )}
+                      <div className="message-body">
+                        <div className="message-meta">
+                          <b>
+                            {m.role === "assistant"
+                              ? agent?.name || "Archived AI agent"
+                              : "You"}
+                          </b>
+                          {m.role === "assistant" && <span>AI</span>}
+                          <time>
+                            {new Date(m.created_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </time>
+                        </div>
+                        <div className="message-text">{m.content}</div>
+                        {m.sources?.length > 0 && (
+                          <div className="sources">
+                            {m.sources.map((s) =>
+                              s.url ? (
+                                <a
+                                  href={s.url}
+                                  key={s.id}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  {s.title} ↗
+                                </a>
+                              ) : (
+                                <details key={s.id}>
+                                  <summary>
+                                    {s.title} · source {s.id.split(":").at(-1)}
+                                  </summary>
+                                  {s.snippet}
+                                </details>
+                              ),
+                            )}
+                          </div>
+                        )}
+                        <div className="message-tools">
+                          <button
+                            aria-label="Copy response"
+                            onClick={() =>
+                              navigator.clipboard
+                                .writeText(m.content)
+                                .then(() => setNotice("Copied."))
+                                .catch(() =>
+                                  setError("Clipboard access was denied."),
+                                )
+                            }
+                          >
+                            <Copy size={13} />
+                            Copy
+                          </button>
+                          {m.role === "user" && (
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                void send(m.content).catch(() => {})
+                              }
+                            >
+                              <RotateCcw size={13} />
+                              Retry
+                            </button>
+                          )}
+                          {m.role === "assistant" && (
+                            <button
+                              onClick={() => {
+                                const spoken = new SpeechSynthesisUtterance(
+                                  m.content,
+                                );
+                                window.speechSynthesis.speak(spoken);
+                                setNotice(
+                                  "Playing with this device’s browser voice. Voices vary by device.",
+                                );
+                              }}
+                            >
+                              <Headphones size={13} />
+                              Read aloud
+                            </button>
                           )}
                         </div>
-                      )}
-                      <div className="message-tools">
-                        <button
-                          aria-label="Copy response"
-                          onClick={() =>
-                            navigator.clipboard
-                              .writeText(m.content)
-                              .then(() => setNotice("Copied."))
-                              .catch(() =>
-                                setError("Clipboard access was denied."),
-                              )
-                          }
-                        >
-                          <Copy size={13} />
-                          Copy
-                        </button>
-                        {m.role === "user" && (
-                          <button
-                            disabled={busy}
-                            onClick={() => void send(m.content).catch(() => {})}
-                          >
-                            <RotateCcw size={13} />
-                            Retry
-                          </button>
-                        )}
-                        {m.role === "assistant" && (
-                          <button
-                            onClick={() => {
-                              const spoken = new SpeechSynthesisUtterance(
-                                m.content,
-                              );
-                              window.speechSynthesis.speak(spoken);
-                              setNotice(
-                                "Playing with this device’s browser voice. Voices vary by device.",
-                              );
-                            }}
-                          >
-                            <Headphones size={13} />
-                            Read aloud
-                          </button>
-                        )}
                       </div>
+                    </article>
+                  );
+                })
+              )}
+              {busy &&
+                Object.entries(partial).map(([agent, text]) => (
+                  <article className="message assistant" key={agent}>
+                    <div className="message-body">
+                      <div className="message-meta">
+                        <b>{data.agents.find((a) => a.id === agent)?.name}</b>
+                        <span>AI · responding</span>
+                      </div>
+                      <div className="message-text">{text}</div>
                     </div>
                   </article>
-                );
-              })
-            )}
-            {busy &&
-              Object.entries(partial).map(([agent, text]) => (
-                <article className="message assistant" key={agent}>
-                  <div className="message-body">
-                    <div className="message-meta">
-                      <b>{data.agents.find((a) => a.id === agent)?.name}</b>
-                      <span>AI · responding</span>
-                    </div>
-                    <div className="message-text">{text}</div>
-                  </div>
-                </article>
-              ))}
-            {busy && (
-              <div className="pending" role="status">
-                <Loader2 className="spin" size={17} />
-                Your cast is thinking. Replies are saved after each agent
-                completes.
-              </div>
-            )}
-            <div ref={end} />
-          </div>
-        </div>
-        <footer className="composer-area">
-          <div className="composer">
-            <textarea
-              aria-label="Message your cast"
-              placeholder={
-                project
-                  ? "Say what you’re thinking…"
-                  : "Create a project to get started…"
-              }
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              maxLength={12000}
-              disabled={!project || project.archived}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  if (text.trim()) void send().catch(() => {});
-                }
-              }}
-            />
-            <div className="composer-tools">
-              <Voice
-                key={selected + participants.join(",")}
-                enabled={
-                  data.capabilities.speech &&
-                  !!project &&
-                  participants.length === 1 &&
-                  !project.archived
-                }
-                voice={
-                  active.find((a) => a.id === participants[0])?.voice || "Kore"
-                }
-                send={send}
-                onError={setError}
-              />
-              <div>
-                <label className="model-toggle">
-                  <input
-                    type="checkbox"
-                    disabled={!data.capabilities.strong}
-                    checked={strong}
-                    onChange={(e) => setStrong(e.target.checked)}
-                  />
-                  Deeper thinking
-                </label>
-                {busy ? (
-                  <button
-                    className="send"
-                    aria-label="Cancel response"
-                    onClick={() => void cancel()}
-                  >
-                    <X size={18} />
-                  </button>
-                ) : (
-                  <button
-                    className="send"
-                    aria-label="Send message"
-                    disabled={
-                      !text.trim() || !participants.length || project?.archived
-                    }
-                    onClick={() => void send().catch(() => {})}
-                  >
-                    <ArrowUp size={19} />
-                  </button>
-                )}
-              </div>
+                ))}
+              {busy && (
+                <div className="pending" role="status">
+                  <Loader2 className="spin" size={17} />
+                  Your cast is thinking. Replies are saved after each agent
+                  completes.
+                </div>
+              )}
+              <div ref={end} />
             </div>
           </div>
-          <div className="composer-caption">
-            <span>
-              {participants.length > 1
-                ? `${participants.length} agents · one turn each`
-                : participants.length === 1
-                  ? "One thoughtful reply at a time."
-                  : "Invite an agent to begin."}
-            </span>
-            <span>AI can make mistakes. Check important details.</span>
-          </div>
-          {!data.capabilities.ai && (
-            <p className="connection-note">
-              AI awaits the owner’s billed provider configuration. Messages are
-              never simulated.
-            </p>
+
+          <footer className="composer-area scene-composer-area">
+            <div className="composer">
+              <textarea
+                aria-label="Message your cast"
+                placeholder={
+                  project
+                    ? "Say what you’re thinking…"
+                    : "Create a project to get started…"
+                }
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                maxLength={12000}
+                disabled={!project || project.archived}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    if (text.trim()) void send().catch(() => {});
+                  }
+                }}
+              />
+              <div className="composer-tools">
+                <div className="scene-composer-left">
+                  <button
+                    aria-label="Choose files or plugins"
+                    title="Choose files or plugins"
+                    onClick={() => {
+                      setLibraryTab("files");
+                      setPanel("library");
+                    }}
+                  >
+                    <Paperclip size={20} />
+                  </button>
+                  <button
+                    aria-label="Project knowledge"
+                    title="Project knowledge"
+                    onClick={() => setPanel("knowledge")}
+                    disabled={!project}
+                  >
+                    <Globe size={19} />
+                  </button>
+                  <button
+                    className="speech-trigger"
+                    aria-label="Speak to your cast"
+                    title="Speak to your cast"
+                    onClick={() => {
+                      if (!data.capabilities.speech) {
+                        setError(
+                          "Server voice is not connected yet. You can use your keyboard’s dictation to fill the message; no simulated recording is enabled.",
+                        );
+                        return;
+                      }
+                      setVoiceOpen((v) => !v);
+                    }}
+                  >
+                    <Mic size={19} />
+                  </button>
+                </div>
+                <div className="participants scene-participants">
+                  {active.map((a) => (
+                    <button
+                      key={a.id}
+                      className={`participant ${participants.includes(a.id) ? "selected" : ""}`}
+                      aria-label={`Select ${a.name} to respond`}
+                      aria-pressed={participants.includes(a.id)}
+                      title={`${a.name}: ${participants.includes(a.id) ? "will respond" : "click to respond"}`}
+                      onClick={() =>
+                        setParticipants((old) =>
+                          old.includes(a.id)
+                            ? old.filter((v) => v !== a.id)
+                            : old.length < 10
+                              ? [...old, a.id]
+                              : old,
+                        )
+                      }
+                    >
+                      <Avatar agent={a} size="mini" />
+                      <span className="sr-only">{a.name}</span>
+                    </button>
+                  ))}
+                  <button
+                    className="scene-invite-agent"
+                    aria-label="Invite an agent"
+                    title="Invite an agent"
+                    onClick={() => setPanel("invite")}
+                    disabled={!project || project.archived}
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
+                <div className="scene-send-group">
+                  <button
+                    className="scene-invite-friends"
+                    onClick={() => {
+                      navigate("networks");
+                      setNotice(
+                        "Create or open a network to invite members by their account ID. Invitations require their acceptance.",
+                      );
+                    }}
+                  >
+                    <Users size={15} />
+                    <span>Invite friends</span>
+                  </button>
+                  {data.capabilities.strong && (
+                    <label
+                      className="model-toggle"
+                      title="Use the stronger configured model"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={strong}
+                        onChange={(e) => setStrong(e.target.checked)}
+                      />
+                      <Sparkles size={15} />
+                    </label>
+                  )}
+                  {busy ? (
+                    <button
+                      className="send"
+                      aria-label="Cancel response"
+                      onClick={() => void cancel()}
+                    >
+                      <X size={20} />
+                    </button>
+                  ) : (
+                    <button
+                      className="send"
+                      aria-label="Send message"
+                      disabled={
+                        !text.trim() ||
+                        !participants.length ||
+                        project?.archived
+                      }
+                      onClick={() => void send().catch(() => {})}
+                    >
+                      <ArrowUp size={22} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {voiceOpen && (
+              <div className="scene-voice">
+                <Voice
+                  key={selected + participants.join(",")}
+                  enabled={
+                    data.capabilities.speech &&
+                    !!project &&
+                    participants.length === 1 &&
+                    !project.archived
+                  }
+                  voice={
+                    active.find((a) => a.id === participants[0])?.voice ||
+                    "Kore"
+                  }
+                  send={send}
+                  onError={setError}
+                />
+                <button
+                  aria-label="Close voice controls"
+                  onClick={() => setVoiceOpen(false)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+            <div className="composer-caption">
+              <span>
+                {participants.length
+                  ? `${participants.length} ${participants.length === 1 ? "agent" : "agents"} selected · one reply each`
+                  : "Choose the agents you want to respond"}
+              </span>
+              <span>
+                {designPreview
+                  ? "Preview: edits stay on this device"
+                  : "AI can make mistakes. Check important details."}
+              </span>
+            </div>
+          </footer>
+        </section>
+      ) : (
+        <section className="scene-page">
+          {view === "map" ? (
+            <WorldMap
+              ownerId={data.user.id}
+              settings={data.profile.settings}
+              onSaveSettings={saveSettings}
+              preview={designPreview}
+            />
+          ) : (
+            <CommunityView
+              view={view}
+              user={data.user}
+              agents={agents}
+              jobs={data.jobs}
+              inbox={data.inbox}
+              projects={data.projects}
+              onOpenMap={() => navigate("map")}
+              onInviteAgent={(id) => {
+                navigate("chat");
+                if (
+                  !data.memberships.some(
+                    (m) => m.project_id === selected && m.agent_id === id,
+                  )
+                )
+                  void membership(id);
+              }}
+              preview={designPreview}
+            />
           )}
-        </footer>
-      </section>
+        </section>
+      )}
+      {designPreview && (
+        <button
+          className="scene-preview-badge"
+          onClick={() => setPanel("preview-info")}
+        >
+          <span />
+          Design preview <ChevronRight size={12} />
+        </button>
+      )}
+      {petVisiting && (
+        <div
+          className="pet-visitor"
+          onAnimationEnd={() => setPetVisiting(false)}
+          aria-hidden="true"
+        >
+          <img src={assetPath("scenes/cat.png")} alt="" />
+          {active[0] && (
+            <span className="pet-carry">
+              <Avatar agent={active[0]} size="mini" />
+            </span>
+          )}
+        </div>
+      )}
       {alert}
+      {panel === "preview-info" && (
+        <Dialog
+          title="A place to try the new design"
+          close={() => setPanel("")}
+        >
+          <p>
+            Create agents, projects, notes, workflows, networks, posts, and map
+            places. Your changes are saved in this browser and survive refresh.
+          </p>
+          <p>
+            Real AI responses, account sign-in, background jobs, voice calls,
+            and external connectors require the connected app. This preview does
+            not simulate their results or send your messages to a model.
+          </p>
+          <button className="primary" onClick={() => setPanel("")}>
+            Keep exploring
+          </button>
+        </Dialog>
+      )}
+      {panel === "scene" && (
+        <Dialog title="Make this space yours" close={() => setPanel("")}>
+          <p className="muted">
+            A view you love. A little company. Room for your next idea.
+          </p>
+          <div className="scene-picker">
+            {[
+              { id: "home", label: "A sunny desk", image: "home.png" },
+              {
+                id: "network",
+                label: "A bigger horizon",
+                image: "network.png",
+              },
+            ].map((v) => (
+              <button
+                key={v.id}
+                className={
+                  data.profile.settings.backgroundScene === v.id
+                    ? "selected"
+                    : ""
+                }
+                onClick={() =>
+                  void saveSettings({ backgroundScene: v.id }).catch((e) =>
+                    setError(e.message),
+                  )
+                }
+              >
+                <img src={assetPath(`scenes/${v.image}`)} alt="" />
+                <span>{v.label}</span>
+              </button>
+            ))}
+          </div>
+          <label className="upload wide scene-background-upload">
+            Choose your own image or video
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/avif,video/mp4,video/webm"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                void (async () => {
+                  try {
+                    const value = await saveBackground(data.user.id, file);
+                    installBackground(value);
+                    await saveSettings({ backgroundScene: "custom" });
+                    setNotice("Background saved on this device.");
+                  } catch (error) {
+                    setError(
+                      error instanceof Error
+                        ? error.message
+                        : "Background could not be saved.",
+                    );
+                  }
+                })();
+                e.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <p className="small">
+            Up to 25 MB. Custom backgrounds stay on this device. Videos play
+            muted; reduced-motion mode shows playback controls.
+          </p>
+          {customBackground && (
+            <div className="scene-uploaded">
+              <span>{customBackground.name}</span>
+              <button
+                onClick={() =>
+                  void (async () => {
+                    await removeBackground(data.user.id);
+                    installBackground(null);
+                    await saveSettings({ backgroundScene: "home" });
+                  })().catch((e) => setError(e.message))
+                }
+              >
+                <Trash2 size={14} />
+                Remove custom background
+              </button>
+            </div>
+          )}
+          <h3>Your welcome companion</h3>
+          <div className="scene-character-picker">
+            {[
+              { id: "cat", label: "The cat", icon: "🐈" },
+              { id: "agent", label: "An agent", icon: "🤖" },
+              { id: "none", label: "Just the view", icon: "✳" },
+            ].map((v) => (
+              <button
+                key={v.id}
+                aria-pressed={
+                  (data.profile.settings.heroCharacter || "cat") === v.id
+                }
+                onClick={() =>
+                  void saveSettings({ heroCharacter: v.id }).catch((e) =>
+                    setError(e.message),
+                  )
+                }
+              >
+                <span>{v.icon}</span>
+                {v.label}
+              </button>
+            ))}
+          </div>
+          {data.profile.settings.heroCharacter === "agent" && (
+            <label>
+              Choose a character
+              <select
+                value={String(
+                  data.profile.settings.heroAgentId ||
+                    active[0]?.id ||
+                    agents[0]?.id ||
+                    "",
+                )}
+                onChange={(e) =>
+                  void saveSettings({ heroAgentId: e.target.value }).catch(
+                    (error) => setError(error.message),
+                  )
+                }
+              >
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="check-label">
+            <input
+              type="checkbox"
+              checked={!!data.profile.settings.catVisits}
+              onChange={(e) =>
+                void saveSettings({ catVisits: e.target.checked }).catch(
+                  (error) => setError(error.message),
+                )
+              }
+            />
+            Let the cat visit other pages
+          </label>
+        </Dialog>
+      )}
+      {panel === "cast-library" && (
+        <Dialog title="Your cast" close={() => setPanel("")}>
+          <p className="muted">
+            Drag an agent into chat, invite them, or open their studio to make
+            them yours.
+          </p>
+          <label className="checkline">
+            <input
+              type="checkbox"
+              checked={archivedAgents}
+              onChange={(event) => setArchivedAgents(event.target.checked)}
+            />
+            Show archived agents
+          </label>
+          <div className="scene-cast-library">
+            {data.agents
+              .filter((a) => archivedAgents || !a.archived)
+              .map((a) => (
+                <div
+                  key={a.id}
+                  className="agent-tile"
+                  draggable={!a.archived}
+                  onDragStart={(e) =>
+                    e.dataTransfer.setData("application/x-cast-agent", a.id)
+                  }
+                >
+                  <button
+                    aria-label={`Edit ${a.name}`}
+                    onClick={() => {
+                      setEdit(a);
+                      setPanel("agent");
+                    }}
+                  >
+                    <Avatar agent={a} />
+                    <b>{a.name}</b>
+                  </button>
+                  <p>{a.expertise}</p>
+                  {a.archived && (
+                    <small className="muted">
+                      Archived · open the studio to restore
+                    </small>
+                  )}
+                  <button
+                    className="outline"
+                    onClick={() => void membership(a.id)}
+                    disabled={
+                      a.archived ||
+                      members.includes(a.id) ||
+                      active.length >= 10
+                    }
+                  >
+                    {members.includes(a.id) ? "In this chat" : "Invite"}
+                  </button>
+                </div>
+              ))}
+          </div>
+          <button className="primary" onClick={createAgent}>
+            <Plus size={16} />
+            Create agent
+          </button>
+        </Dialog>
+      )}
+      {panel === "library" && (
+        <Dialog title="Files & plugins" close={() => setPanel("")}>
+          <div className="library-tabs">
+            <button
+              className={libraryTab === "files" ? "active" : ""}
+              onClick={() => setLibraryTab("files")}
+            >
+              <Paperclip size={16} />
+              Files
+            </button>
+            <button
+              className={libraryTab === "plugins" ? "active" : ""}
+              onClick={() => setLibraryTab("plugins")}
+            >
+              <Puzzle size={16} />
+              Plugins
+            </button>
+          </div>
+          {libraryTab === "files" ? (
+            <>
+              <p className="muted">
+                Give your cast knowledge from this project. Each agent’s
+                document permission and selected files still control access.
+              </p>
+              <div className="scene-files-list">
+                {data.documents
+                  .filter((d) => d.project_id === selected)
+                  .map((d) => (
+                    <button key={d.id} onClick={() => setPanel("knowledge")}>
+                      <FileText size={18} />
+                      <span>
+                        {d.name}
+                        <small>{d.status}</small>
+                      </span>
+                      <ChevronRight size={15} />
+                    </button>
+                  ))}
+              </div>
+              <button
+                className="primary"
+                onClick={() => setPanel("knowledge")}
+                disabled={!project}
+              >
+                <Plus size={16} />
+                Add files or notes
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="muted">
+                Add instructions with templates now. External plugins need a
+                connected service and your explicit permission.
+              </p>
+              <button
+                className="scene-plugin-card"
+                onClick={() => setPanel("workflows")}
+              >
+                <Sparkles size={25} />
+                <span>
+                  <b>Templates & workflows</b>
+                  <small>
+                    Morning briefs, tables, diagrams, documents, and your own
+                    styles
+                  </small>
+                </span>
+                <ChevronRight size={17} />
+              </button>
+              {[
+                "Gmail",
+                "Notion",
+                "Slack",
+                "Drive",
+                "Image generation",
+                "Video generation",
+              ].map((name) => (
+                <button
+                  className="scene-plugin-card"
+                  key={name}
+                  draggable
+                  onDragStart={(e) =>
+                    e.dataTransfer.setData("application/x-cast-plugin", name)
+                  }
+                  onClick={() => setPluginInfo(name)}
+                >
+                  <Puzzle size={22} />
+                  <span>
+                    <b>{name}</b>
+                    <small>Requires a connected provider</small>
+                  </span>
+                  <span className="integration-status">Not connected</span>
+                </button>
+              ))}
+            </>
+          )}
+        </Dialog>
+      )}
+      {pluginInfo && (
+        <Dialog title={pluginInfo} close={() => setPluginInfo("")}>
+          <div className="plugin-connection-note">
+            <Puzzle size={34} />
+            <h3>Connect before using this plugin</h3>
+            <p>
+              {pluginInfo} is not connected to this app yet. No external
+              accounts are accessed or actions performed. You can save related
+              instructions in your agent’s Tools tab.
+            </p>
+            <button
+              className="primary"
+              onClick={() => {
+                setPluginInfo("");
+                if (active[0]) {
+                  setEdit(active[0]);
+                  setPanel("agent");
+                } else setPanel("cast-library");
+              }}
+            >
+              Open agent studio
+            </button>
+          </div>
+        </Dialog>
+      )}
       {panel === "project-new" && (
         <Dialog title="A home for an idea" close={() => setPanel("")}>
           <form
@@ -1182,8 +1934,8 @@ export function Cast({ configured }: { configured: boolean }) {
       {panel === "invite" && (
         <Dialog title="Bring your cast together" close={() => setPanel("")}>
           <p className="muted">
-            Invite here, or drag an avatar from the shelf. Select up to three
-            responding agents in the project bar.
+            Invite here, or drag an avatar from the shelf. A chat can hold up to
+            10 agents. Blue circles show who will respond.
           </p>
           <div className="invite-list">
             {agents.map((a) => (
@@ -1205,238 +1957,46 @@ export function Cast({ configured }: { configured: boolean }) {
         </Dialog>
       )}
       {panel === "agent" && edit && (
-        <Dialog
-          title={edit.id ? edit.name : "Create an AI agent"}
-          close={() => setPanel("")}
-        >
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void action(async () => {
-                const saved = await api<Agent>(
-                  edit.id ? `agents/${edit.id}` : "agents",
-                  {
-                    method: edit.id ? "PATCH" : "POST",
-                    body: JSON.stringify(edit),
-                  },
-                );
-                setEdit(saved);
-                setNotice("Agent saved.");
-              });
-            }}
-          >
-            <div className="agent-editor-top">
-              <Avatar agent={edit} />
-              <label className="upload">
-                Upload avatar
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file)
-                      void action(async () => {
-                        const v = await upload(file, "avatar");
-                        setEdit({ ...edit, avatar: v.path! });
-                      });
-                  }}
-                />
-              </label>
-              <div className="swatches">
-                {["amber", "sage", "slate", "rose", "blue", "violet"].map(
-                  (color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      aria-label={`${color} avatar`}
-                      className={`swatch ${color}`}
-                      onClick={() => setEdit({ ...edit, avatar: color })}
-                    />
-                  ),
-                )}
-              </div>
-            </div>
-            {(
-              [
-                "name",
-                "personality",
-                "worldview",
-                "background",
-                "expertise",
-                "instructions",
-                "memories",
-              ] as const
-            ).map((key) => (
-              <label key={key}>
-                {key === "worldview"
-                  ? "Beliefs & worldview"
-                  : key === "memories"
-                    ? "Personal memory (editable)"
-                    : key === "instructions"
-                      ? "Working instructions"
-                      : key[0].toUpperCase() + key.slice(1)}
-                {key === "name" ? (
-                  <input
-                    value={edit[key]}
-                    required
-                    maxLength={100}
-                    onChange={(e) =>
-                      setEdit({ ...edit, [key]: e.target.value })
-                    }
-                  />
-                ) : (
-                  <textarea
-                    value={edit[key]}
-                    maxLength={key === "memories" ? 6000 : 2000}
-                    onChange={(e) =>
-                      setEdit({ ...edit, [key]: e.target.value })
-                    }
-                  />
-                )}
-              </label>
-            ))}
-            <label>
-              Assigned server voice
-              <select
-                value={edit.voice}
-                onChange={(e) => setEdit({ ...edit, voice: e.target.value })}
-              >
-                {voices.map((v) => (
-                  <option key={v}>{v}</option>
-                ))}
-              </select>
-            </label>
-            <fieldset>
-              <legend>Explicit permissions</legend>
-              {(["documents", "memory", "search", "scheduled"] as const).map(
-                (key) => (
-                  <label className="check" key={key}>
-                    <input
-                      type="checkbox"
-                      checked={edit.permissions[key]}
-                      onChange={(e) =>
-                        setEdit({
-                          ...edit,
-                          permissions: {
-                            ...edit.permissions,
-                            [key]: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                    {key === "documents"
-                      ? "Read invited project documents"
-                      : key === "memory"
-                        ? "Use personal memory"
-                        : key === "search"
-                          ? "Use grounded search for enabled research jobs"
-                          : "Generate enabled scheduled work"}
-                  </label>
-                ),
-              )}
-              <label>
-                Project scope
-                <select
-                  multiple
-                  value={edit.project_scope}
-                  onChange={(e) =>
-                    setEdit({
-                      ...edit,
-                      project_scope: [...e.target.selectedOptions].map(
-                        (o) => o.value,
-                      ),
-                    })
-                  }
-                >
-                  {data.projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <small>
-                  No selection allows any project you explicitly invite this
-                  agent into.
-                </small>
-              </label>
-            </fieldset>
-            <button className="primary">Save agent</button>
-          </form>
-          {edit.id && (
-            <div className="actions wrap">
-              <button
-                onClick={() =>
-                  void action(async () => {
-                    const p = await api<Project>("projects", {
-                      method: "POST",
-                      body: JSON.stringify({
-                        name: `Studio · ${edit.name}`,
-                        archived: false,
-                      }),
-                    });
-                    await api("memberships", {
-                      method: "POST",
-                      body: JSON.stringify({
-                        project_id: p.id,
-                        agent_id: edit.id,
-                      }),
-                    });
-                    setSelected(p.id);
-                    setPanel("");
-                    setNotice(
-                      "Studio created. Send a message to preview this agent with the real provider.",
-                    );
-                  })
-                }
-              >
-                Open real preview
-              </button>
-              <button
-                onClick={() =>
-                  void action(() =>
-                    api("agents", {
-                      method: "POST",
-                      body: JSON.stringify({
-                        ...edit,
-                        name: `${edit.name} copy`.slice(0, 100),
-                      }),
-                    }),
-                  )
-                }
-              >
-                Duplicate
-              </button>
-              <button
-                onClick={() =>
-                  void action(async () => {
-                    await api(`agents/${edit.id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        ...edit,
-                        archived: !edit.archived,
-                      }),
-                    });
-                    setPanel("");
-                  })
-                }
-              >
-                {edit.archived ? "Restore" : "Archive"}
-              </button>
-              <button
-                className="danger"
-                onClick={() => {
-                  if (confirm("Delete this agent and its personal memory?"))
-                    void action(async () => {
-                      await api(`agents/${edit.id}`, { method: "DELETE" });
-                      setPanel("");
-                    });
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          )}
-        </Dialog>
+        <AgentStudio
+          agent={edit}
+          projects={data.projects}
+          documents={data.documents}
+          agents={data.agents}
+          capabilities={data.capabilities}
+          onClose={() => setPanel("")}
+          onDelete={async (id) => {
+            await api(`agents/${id}`, { method: "DELETE" });
+            await reload();
+            setPanel("");
+          }}
+          onSave={async (draft, applyAll) => {
+            const value = draft as Agent;
+            const saved = await api<Agent>(
+              value.id ? `agents/${value.id}` : "agents",
+              {
+                method: value.id ? "PATCH" : "POST",
+                body: JSON.stringify(value),
+              },
+            );
+            if (applyAll)
+              for (const workflow of value.config?.workflow_ids || [])
+                await api(`workflows/${workflow}/apply`, {
+                  method: "POST",
+                  body: JSON.stringify({ applyToAll: true }),
+                });
+            await reload();
+            setEdit(saved);
+            setNotice("Agent saved.");
+          }}
+        />
+      )}
+      {panel === "workflows" && (
+        <WorkflowStudio
+          agents={data.agents}
+          capabilities={data.capabilities}
+          onClose={() => setPanel("")}
+          onChanged={reload}
+        />
       )}
       {panel === "knowledge" && (
         <Dialog title="Project knowledge" close={() => setPanel("")}>
@@ -1915,7 +2475,11 @@ export function Cast({ configured }: { configured: boolean }) {
                     quietEnd: f.get("quietEnd"),
                   }),
                 });
-                setNotice("Settings saved across your devices.");
+                setNotice(
+                  designPreview
+                    ? "Settings saved on this device."
+                    : "Settings saved across your devices.",
+                );
               });
             }}
           >
@@ -1990,6 +2554,13 @@ export function Cast({ configured }: { configured: boolean }) {
             </button>
             <button
               onClick={async () => {
+                if (designPreview) {
+                  setPanel("");
+                  setNotice(
+                    "This is a device-only design preview. No account is signed in.",
+                  );
+                  return;
+                }
                 await browserDb().auth.signOut();
                 setData(null);
                 setPanel("");
@@ -2014,8 +2585,10 @@ export function Cast({ configured }: { configured: boolean }) {
           </div>
           <p className="muted small">
             Exports include your records, extracted text, and links to original
-            uploads. Download those files within one hour, before deleting your
-            account.
+            uploads.{" "}
+            {designPreview
+              ? "Download these browser links before closing this page or deleting preview data."
+              : "Download those files within one hour, before deleting your account."}
           </p>
           <details className="delete-account">
             <summary>Delete account and private data</summary>

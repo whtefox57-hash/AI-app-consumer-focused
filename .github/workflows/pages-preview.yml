@@ -1,0 +1,96 @@
+name: Publish the Cast design preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "preview/**"
+      - "src/components/**"
+      - "src/lib/**"
+      - "src/app/globals.css"
+      - "public/**"
+      - "tests/browser/**"
+      - "playwright.preview.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".node-version"
+      - ".github/workflows/pages-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cast-pages-preview
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the isolated static preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            preview/package-lock.json
+      - name: Install shared app dependencies
+        timeout-minutes: 5
+        run: npm ci --no-audit --no-fund
+      - name: Install preview dependencies
+        timeout-minutes: 3
+        run: npm ci --prefix preview --no-audit --no-fund
+      - name: Build the static click-through preview
+        timeout-minutes: 5
+        run: npm run build --prefix preview -- --base "/${{ github.event.repository.name }}/"
+      - name: Install Chromium for preview checks
+        timeout-minutes: 5
+        run: npx playwright install --with-deps chromium
+      - name: Test the published base path and local preview behavior
+        timeout-minutes: 4
+        run: npx playwright test --config playwright.preview.config.ts --global-timeout=180000 --reporter=line
+        env:
+          CHROMIUM_PATH: ""
+      # The repository owner must enable Settings → Pages → Source: GitHub Actions.
+      # Workflow GITHUB_TOKEN cannot enable a disabled Pages site.
+      - name: Verify the existing GitHub Pages configuration
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: false
+      - name: Upload only the public preview assets
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: preview/dist
+      - name: Upload preview failure evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ failure() || cancelled() }}
+        with:
+          name: preview-browser-failures-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: test-results
+
+  deploy:
+    name: Deploy the static design preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the preview
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

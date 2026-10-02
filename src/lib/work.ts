@@ -9,11 +9,63 @@ import {
   boundedContext,
   model,
   strongModel,
+  documentsForAgent,
 } from "./ai";
 import { admin, checked } from "./supabase";
 import { chatSchema, inScope } from "./validation";
 import { retrieve, citedSources } from "./retrieval";
-import type { Agent, Document, Message, Job, Source } from "./types";
+import type { Agent, Document, Message, Job, Source, Workflow } from "./types";
+export async function agentWorkflows(
+  store: SupabaseClient,
+  user: string,
+  agent: Agent,
+) {
+  const ids = agent.config?.workflow_ids ?? [];
+  if (!ids.length) return [];
+  const workflows = checked(
+    await store.from("workflows").select("*").eq("user_id", user).in("id", ids),
+  ) as Workflow[];
+  if (
+    workflows.length !== ids.length ||
+    workflows.some((workflow) => workflow.kind !== "text" || !workflow.enabled)
+  )
+    throw new AppError(
+      403,
+      "An assigned workflow is unavailable. Remove it or enable a supported text workflow.",
+    );
+  return ids.map((id) => workflows.find((workflow) => workflow.id === id)!);
+}
+// A failed participant does not erase the independently completed replies.
+export async function runContributions<T>(
+  count: number,
+  signal: AbortSignal,
+  contribute: (index: number) => Promise<T>,
+) {
+  const outcomes: PromiseSettledResult<T>[] = new Array(count);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(3, count) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= count) return;
+        try {
+          if (signal.aborted)
+            throw new AppError(
+              499,
+              "Response cancelled or its time limit was reached.",
+            );
+          outcomes[index] = {
+            status: "fulfilled",
+            value: await contribute(index),
+          };
+        } catch (reason) {
+          outcomes[index] = { status: "rejected", reason };
+        }
+      }
+    }),
+  );
+  return outcomes;
+}
 export function nextRun(cron: string, timezone: string, after = new Date()) {
   try {
     const a = CronExpressionParser.parse(cron, {
@@ -82,6 +134,7 @@ export async function chat(
   onDelta?: (agent: string, text: string) => void,
 ) {
   const input = chatSchema.parse(body);
+  const turnSignal = AbortSignal.any([signal, AbortSignal.timeout(100000)]);
   if (!ready())
     throw new AppError(
       503,
@@ -137,6 +190,15 @@ export async function chat(
       403,
       "One or more agents no longer have access to this project.",
     );
+  const plans = await Promise.all(
+    input.agentIds.map((agentId) =>
+      agentWorkflows(
+        supabase,
+        user,
+        agents.find((agent) => agent.id === agentId)!,
+      ),
+    ),
+  );
   await privileged
     .from("requests")
     .update({ status: "failed" })
@@ -184,77 +246,92 @@ export async function chat(
         request_id: input.requestId,
       }),
     );
-    const replies: Message[] = [];
-    for (let i = 0; i < agents.length; i++) {
-      const agent = agents.find((a) => a.id === input.agentIds[i])!;
-      const sources = agent.permissions.documents
-        ? retrieve(docs, input.text)
-        : [];
-      const result = await provider.generate({
-        system: systemPrompt(agent),
-        prompt:
-          JSON.stringify({
-            projectSummary: project.summary || "",
-            conversation: JSON.parse(
-              boundedContext([...history, ...replies], sources, input.text),
-            ),
-          }) +
-          (agents.length > 1
-            ? "\nYou are in a moderated roundtable. Give one distinct contribution; no further turns will run."
-            : ""),
-        strong: input.strong,
-        signal,
-        onDelta: onDelta ? (text) => onDelta(agent.id, text) : undefined,
-      });
-      await finish(reservations[i], result);
-      const latest = checked(
-        await supabase.from("agents").select("*").eq("id", agent.id).single(),
-      ) as Agent;
-      const membership = checked(
-        await supabase
-          .from("memberships")
-          .select("agent_id")
-          .eq("project_id", input.projectId)
-          .eq("agent_id", agent.id)
-          .maybeSingle(),
-      );
-      const request = checked(
-        await privileged
-          .from("requests")
-          .select("status")
-          .eq("id", input.requestId)
-          .eq("user_id", user)
-          .single(),
-      );
-      if (signal.aborted || request.status !== "pending")
-        throw new AppError(499, "Response cancelled.");
-      if (
-        !membership ||
-        !inScope(latest, input.projectId) ||
-        JSON.stringify(latest.permissions) !==
-          JSON.stringify(agent.permissions) ||
-        latest.memories !== agent.memories
-      )
-        throw new AppError(
-          403,
-          "Agent access or memory changed during this request. The response was discarded.",
+    const outcomes = await runContributions(
+      agents.length,
+      turnSignal,
+      async (i) => {
+        const agent = agents.find((a) => a.id === input.agentIds[i])!;
+        const sources = retrieve(documentsForAgent(agent, docs), input.text);
+        const result = await provider.generate({
+          system: systemPrompt(agent, plans[i]),
+          prompt:
+            JSON.stringify({
+              projectSummary: project.summary || "",
+              conversation: JSON.parse(
+                boundedContext(history, sources, input.text),
+              ),
+            }) +
+            (agents.length > 1
+              ? "\nYou are in a moderated roundtable. Each selected agent gives exactly one independent contribution to this request. Respond from your perspective without claiming to have seen another agent's reply. No further turns will run."
+              : ""),
+          strong: input.strong,
+          signal: turnSignal,
+          timeoutMs: 23000,
+          onDelta: onDelta ? (text) => onDelta(agent.id, text) : undefined,
+        });
+        await finish(reservations[i], result);
+        const latest = checked(
+          await supabase.from("agents").select("*").eq("id", agent.id).single(),
+        ) as Agent;
+        const membership = checked(
+          await supabase
+            .from("memberships")
+            .select("agent_id")
+            .eq("project_id", input.projectId)
+            .eq("agent_id", agent.id)
+            .maybeSingle(),
         );
-      const message = checked(
-        await supabase
-          .from("messages")
-          .insert({
-            project_id: input.projectId,
-            agent_id: agent.id,
-            role: "assistant",
-            content: result.text,
-            sources: citedSources(result.text, sources),
-            request_id: input.requestId,
-          })
-          .select("*")
-          .single(),
-      ) as Message;
-      replies.push(message);
-    }
+        const request = checked(
+          await privileged
+            .from("requests")
+            .select("status")
+            .eq("id", input.requestId)
+            .eq("user_id", user)
+            .single(),
+        );
+        if (turnSignal.aborted || request.status !== "pending")
+          throw new AppError(499, "Response cancelled.");
+        if (
+          !membership ||
+          !inScope(latest, input.projectId) ||
+          JSON.stringify(latest.permissions) !==
+            JSON.stringify(agent.permissions) ||
+          latest.memories !== agent.memories ||
+          JSON.stringify(latest.config ?? {}) !==
+            JSON.stringify(agent.config ?? {})
+        )
+          throw new AppError(
+            403,
+            "Agent access or memory changed during this request. The response was discarded.",
+          );
+        const currentPlans = await agentWorkflows(supabase, user, latest);
+        if (JSON.stringify(currentPlans) !== JSON.stringify(plans[i]))
+          throw new AppError(
+            403,
+            "An assigned workflow changed during this request. The response was discarded.",
+          );
+        const message = checked(
+          await supabase
+            .from("messages")
+            .insert({
+              project_id: input.projectId,
+              agent_id: agent.id,
+              role: "assistant",
+              content: result.text,
+              sources: citedSources(result.text, sources),
+              request_id: input.requestId,
+            })
+            .select("*")
+            .single(),
+        ) as Message;
+        return message;
+      },
+    );
+    const failed = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    const replies = outcomes.flatMap((outcome) =>
+      outcome.status === "fulfilled" ? [outcome.value] : [],
+    );
     checked(
       await privileged
         .from("requests")
@@ -277,6 +354,11 @@ export async function chat(
       .eq("id", input.requestId)
       .eq("user_id", user)
       .eq("status", "pending");
+    if (turnSignal.aborted && !signal.aborted)
+      throw new AppError(
+        504,
+        "This turn reached its time limit. Completed replies were saved. Select fewer agents or retry the remaining agents.",
+      );
     throw error;
   }
 }
@@ -337,35 +419,37 @@ export async function runJobs() {
             403,
             "Agent lacks scheduled-work or search permission.",
           );
+        const plans = await agentWorkflows(store, run.user_id, agent);
+        const contextSources = retrieve(
+          documentsForAgent(
+            agent,
+            checked(
+              await store
+                .from("documents")
+                .select("*")
+                .eq("project_id", job.project_id)
+                .eq("user_id", run.user_id)
+                .eq("status", "ready"),
+            ) as Document[],
+          ),
+          job.topic,
+        );
         [reservation] = await reserve(
           run.user_id,
           job.kind === "research" ? "search" : "text",
           model,
         );
         const result = await provider.generate({
-          system: systemPrompt(agent),
-          prompt: boundedContext(
-            [],
-            agent.permissions.documents
-              ? retrieve(
-                  checked(
-                    await store
-                      .from("documents")
-                      .select("*")
-                      .eq("project_id", job.project_id)
-                      .eq("user_id", run.user_id)
-                      .eq("status", "ready"),
-                  ) as Document[],
-                  job.topic,
-                )
-              : [],
-            job.topic,
-          ),
+          system: systemPrompt(agent, plans),
+          prompt: boundedContext([], contextSources, job.topic),
           search: job.kind === "research",
         });
         await finish(reservation, result);
         text = result.text;
-        sources = result.sources;
+        sources = [
+          ...citedSources(result.text, contextSources),
+          ...result.sources,
+        ];
         const latest = checked(
           await store
             .from("agents")
@@ -377,7 +461,14 @@ export async function runJobs() {
         if (
           !inScope(latest, job.project_id) ||
           !latest.permissions.scheduled ||
-          (job.kind === "research" && !latest.permissions.search)
+          (job.kind === "research" && !latest.permissions.search) ||
+          JSON.stringify(latest.permissions) !==
+            JSON.stringify(agent.permissions) ||
+          latest.memories !== agent.memories ||
+          JSON.stringify(latest.config ?? {}) !==
+            JSON.stringify(agent.config ?? {}) ||
+          JSON.stringify(await agentWorkflows(store, run.user_id, latest)) !==
+            JSON.stringify(plans)
         )
           throw new AppError(403, "Agent permission was revoked.");
       }

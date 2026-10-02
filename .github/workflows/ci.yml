@@ -1,35 +1,131 @@
 name: Validate Cast
+
 on: [push, pull_request]
+
 permissions:
   contents: read
+
+concurrency:
+  group: cast-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AI_ENABLED: "false"
+  GEMINI_PAID_PROJECT: "false"
+  NPM_CONFIG_CACHE: /tmp/cast-npm-cache
+
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    name: Types, database invariants, and production build
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      AI_ENABLED: "false"
-      GEMINI_PAID_PROJECT: "false"
-      NPM_CONFIG_CACHE: /tmp/cast-npm-cache
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
           cache: npm
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run local:start > /tmp/cast-local-stack.log 2>&1 &
-      - run: npx playwright install --with-deps chromium
-      - name: Wait for local backend and run browser flows
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: npm ci --no-audit --no-fund
+      - name: Check types
+        timeout-minutes: 3
+        run: npm run typecheck
+      - name: Test database invariants
+        timeout-minutes: 6
+        run: npm test
+      - name: Build the production app
+        timeout-minutes: 6
+        run: npm run build
+
+  browser:
+    name: Authentication, private storage, and durable browser flows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: npm ci --no-audit --no-fund
+      - name: Start the loopback test backend and wait for readiness
+        timeout-minutes: 8
         run: |
-          node --input-type=module -e "let ready=false;for(let i=0;i<180;i++){try{if((await fetch('http://127.0.0.1:54321/auth/v1/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,1000));}if(!ready)process.exit(1);"
-          npm run test:browser
+          setsid nohup npm run local:start > "$RUNNER_TEMP/cast-local-stack.log" 2>&1 < /dev/null &
+          printf '%s\n' "$!" > "$RUNNER_TEMP/cast-local-stack.pid"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { setTimeout as delay } from 'node:timers/promises';
+          const castStackPid = Number(readFileSync(`${process.env.RUNNER_TEMP}/cast-local-stack.pid`, 'utf8').trim());
+          const deadline = Date.now() + 7 * 60_000;
+          let lastStatus = 'not reachable';
+          while (Date.now() < deadline) {
+            try {
+              process.kill(castStackPid, 0);
+            } catch {
+              throw new Error('The loopback backend exited before readiness; inspect the saved startup log.');
+            }
+            try {
+              const response = await fetch('http://127.0.0.1:54321/auth/v1/health', {
+                signal: AbortSignal.timeout(3_000),
+              });
+              if (response.ok) {
+                console.log('Loopback authentication, database migrations, and private storage are ready.');
+                process.exit(0);
+              }
+              lastStatus = `HTTP ${response.status}`;
+            } catch {
+              lastStatus = 'connection failed or exceeded three seconds';
+            }
+            await delay(1_000);
+          }
+          throw new Error(`Loopback backend did not become ready within seven minutes (${lastStatus}); inspect the saved startup and service logs.`);
+          NODE
+      - name: Install Chromium
+        timeout-minutes: 5
+        run: npx playwright install --with-deps chromium
+      - name: Test the real local backend in Chromium
+        timeout-minutes: 10
+        run: npm run test:browser -- --global-timeout=480000 --reporter=line
         env:
           CHROMIUM_PATH: ""
-      - run: npm run build
-      - uses: actions/upload-artifact@v4
-        if: failure()
+      - name: Collect startup and service diagnostics
+        if: ${{ failure() || cancelled() }}
+        timeout-minutes: 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/cast-ci-diagnostics"
+          for cast_service in cast-local-db cast-local-auth cast-local-rest cast-local-storage cast-local-mail; do
+            timeout 10s docker logs --tail 150 "$cast_service" > "$RUNNER_TEMP/cast-ci-diagnostics/$cast_service.log" 2>&1 || true
+          done
+          if [[ -f "$RUNNER_TEMP/cast-local-stack.log" ]]; then
+            tail -n 120 "$RUNNER_TEMP/cast-local-stack.log"
+          fi
+      - name: Upload failure evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ failure() || cancelled() }}
         with:
-          name: browser-failures
-          path: test-results
+          name: browser-failures-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            test-results
+            ${{ runner.temp }}/cast-local-stack.log
+            ${{ runner.temp }}/cast-ci-diagnostics
+      - name: Stop the owned test backend
+        if: always()
+        timeout-minutes: 2
+        run: |
+          if [[ -f "$RUNNER_TEMP/cast-local-stack.pid" ]]; then
+            cast_stack_pid=$(cat "$RUNNER_TEMP/cast-local-stack.pid")
+            if [[ "$cast_stack_pid" =~ ^[0-9]+$ ]]; then
+              kill -TERM -- "-$cast_stack_pid" 2>/dev/null || true
+            fi
+          fi
+          timeout 30s npm run local:stop || true

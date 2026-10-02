@@ -1,3 +1,27 @@
+export type AgentConfig = {
+  role?: string;
+  beliefs?: string;
+  origin?: string;
+  story?: string;
+  emotions?: string[];
+  capabilities?: string[];
+  tools?: string[];
+  responseStyle?: "balanced" | "concise" | "thorough";
+  examples?: { prompt: string; response: string }[];
+  document_ids?: string[];
+  workflow_ids?: string[];
+};
+export type Workflow = {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  kind: "text" | "image" | "video";
+  steps: { id: string; title: string; instructions: string }[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
 export type Agent = {
   id: string;
   user_id: string;
@@ -18,6 +42,7 @@ export type Agent = {
   };
   project_scope: string[];
   archived: boolean;
+  config?: AgentConfig;
 };
 export type Project = {
   id: string;
@@ -78,6 +103,7 @@ export type InboxItem = {
 export type Boot = {
   user: { id: string; email: string };
   agents: Agent[];
+  workflows?: Workflow[];
   projects: Project[];
   memberships: { project_id: string; agent_id: string }[];
   messages: Message[];
