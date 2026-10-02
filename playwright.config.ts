@@ -19,6 +19,7 @@ export default defineConfig({
     command: "AI_ENABLED=false npm run local:dev",
     url: "http://localhost:3000/api/health",
     reuseExistingServer: true,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 5000 },
     timeout: 120000,
   },
 });

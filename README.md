@@ -2,7 +2,7 @@
 
 Cast is a workspace for saved AI characters, projects, conversations, knowledge, workflows, and community spaces. The redesign includes a scenic chat workspace, customizable Home and Networks views, and an interactive world map.
 
-There are two builds: the connected Next.js application and a static click-through design preview. **No public site is verified yet.** The preview saves changes on the visitor's device and does not generate AI replies, sign in accounts, or execute background jobs. Real, synthetic Gemini replies are verified separately; authenticated hosted chat and managed persistence still need the service setup below.
+There are two builds: the connected Next.js application and a static click-through design preview. **The [public design preview](https://whtefox57-hash.github.io/AI-app-consumer-focused/) is published and verified.** The preview saves changes on the visitor's device and does not generate AI replies, sign in accounts, or execute background jobs. Real, synthetic Gemini replies are verified separately; authenticated hosted chat and managed persistence still need the service setup below.
 
 The working name is temporary; trademark clearance has not been performed.
 
@@ -19,7 +19,7 @@ The working name is temporary; trademark clearance has not been performed.
 
 ## Try the design preview
 
-The owner has enabled GitHub Pages with **Source → GitHub Actions**, and its HTTPS configuration is verified. The publication workflow is prepared but its first design-preview deployment still needs to pass. The configured site address is `https://whtefox57-hash.github.io/AI-app-consumer-focused/`; it is not a working preview until the workflow deploys the assets. The source repository and its screenshots are not a deployed site.
+Open the [published Cast preview](https://whtefox57-hash.github.io/AI-app-consumer-focused/). The GitHub Pages workflow passed its production build and three Chromium tests, then deployed the exact tested artifact. Hosted navigation, message/post persistence after refresh, real map assets/search, and mobile layout were verified. No signup or API key is needed for this preview.
 
 The preview supports navigation and local editing of agents, projects, notes, workflows, community content, and map places. Settings and edits survive refresh in the same browser. Original uploads remain in browser IndexedDB; PDF text extraction requires the connected app. Human messages are saved without invented assistant responses. A saved schedule does not run in the preview. The interface labels this mode and explains the service boundary.
 
@@ -81,7 +81,7 @@ AI_ENABLED=false npm run local:build
 
 The browser suite requires the running local backend. It starts a dev server if port 3000 is unused, or checks an existing server. Always use an AI-disabled local server: the tests exercise the missing-provider path and must not spend a production allowance. This cloud uses `/usr/bin/chromium`; elsewhere install Playwright Chromium and set `CHROMIUM_PATH`, or use the checked-in GitHub Actions workflow.
 
-Earlier remote CI runs timed out during the combined readiness/browser step. The revised workflow separates type, database, and build checks from browser integration, bounds startup requests and test duration, and retains failure logs. Its new remote results must be verified after publishing; local results do not establish a remote pass.
+The workflows separate type/database/build checks from connected browser integration, bound readiness/test duration, and retain diagnostics. A reproduced shutdown defect was fixed by using graceful SIGTERM for the Playwright-owned Next.js supervisor; all three tests now complete and release the port. The static-preview publication workflow passed remotely. Connected CI status must be checked for the current commit.
 
 ## Connect the real services
 
