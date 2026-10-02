@@ -64,7 +64,7 @@ The browser suite requires the running local backend. It starts a dev server if 
 
 ## Connect the real services
 
-1. Create a Supabase project and provide its **public project URL**. Configure its public publishable key, backend service-role key, migrations, and auth redirects as documented in `DEPLOYMENT.md`.
+1. Use the existing Supabase project `ffvzjewuccvwpbpdlwhm`. Correct public URL/key delivery, configure the backend service-role key, and apply migrations and auth redirects as documented in `DEPLOYMENT.md`.
 2. Create a Google AI Studio / Gemini Developer API project linked to active billing. The owner funds access; ordinary users never enter model keys. Review current paid-service data terms and prices, enter `GEMINI_API_KEY` securely in environment/hosting settings, then explicitly set `GEMINI_PAID_PROJECT=true`.
 3. Provide a hosting account that supports Next.js/Node 24, such as Vercel, and a supported cron or separate worker. Set production secrets on that host; cloud workspace settings do not populate a host automatically.
 4. Apply the saved cloud network settings so official documentation and provider domains can be reached. Saving a draft does not activate those settings or deploy software.

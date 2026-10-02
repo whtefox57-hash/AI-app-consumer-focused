@@ -4,7 +4,7 @@
 
 No integrated AppDeploy, managed database, deploy connector, notification service, or host session is available in this workspace. The implementation uses official Gemini and Supabase SDKs with Next.js. The Supabase project URL is supplied and the Gemini key produced real synthetic text responses. Supabase public-value delivery, backend/migration access, billed-project confirmation and a hosting account remain pending. There is no deployed app URL.
 
-The cloud settings draft contains required domains and a Gemini secret requirement. Applying/publishing cloud environment settings is a product action; saving the draft does not apply network rules, create secret values, start services, publish source, or deploy the app. The GitHub origin is currently empty. Source is present in this workspace; pushing it or importing it into a host has not been performed. The filesystem and dependency-backed typecheck/unit tests were verified in a new cloud instance after Done; running processes must restart.
+The cloud settings draft contains required domains and a Gemini secret requirement. Applying/publishing cloud environment settings is a product action; saving the draft does not apply network rules, create secret values, start services, publish source, or deploy the app. The complete source and actual screenshot are published on the connected GitHub repository's `main` branch. Importing it into a hosting account has not been performed. The filesystem and dependency-backed typecheck/unit tests were verified in a new cloud instance after Done; running processes must restart.
 
 ## Managed backend
 
