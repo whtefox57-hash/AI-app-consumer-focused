@@ -1,0 +1,35 @@
+name: Validate Cast
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AI_ENABLED: "false"
+      GEMINI_PAID_PROJECT: "false"
+      NPM_CONFIG_CACHE: /tmp/cast-npm-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run local:start > /tmp/cast-local-stack.log 2>&1 &
+      - run: npx playwright install --with-deps chromium
+      - name: Wait for local backend and run browser flows
+        run: |
+          node --input-type=module -e "let ready=false;for(let i=0;i<180;i++){try{if((await fetch('http://127.0.0.1:54321/auth/v1/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,1000));}if(!ready)process.exit(1);"
+          npm run test:browser
+        env:
+          CHROMIUM_PATH: ""
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failures
+          path: test-results

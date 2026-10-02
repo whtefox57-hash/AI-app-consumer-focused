@@ -1,0 +1,48 @@
+{
+  "name": "cast",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "NODE_USE_ENV_PROXY=1 next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "NODE_USE_ENV_PROXY=1 next start --hostname 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "local:start": "tsx scripts/local-stack.ts",
+    "local:stop": "docker stop cast-local-auth cast-local-rest cast-local-storage cast-local-mail cast-local-db",
+    "worker": "NODE_USE_ENV_PROXY=1 tsx scripts/worker.ts",
+    "probe:ai": "NODE_USE_ENV_PROXY=1 tsx scripts/probe-ai.ts",
+    "local:dev": "tsx scripts/local-dev.ts dev",
+    "local:build": "tsx scripts/local-dev.ts build",
+    "local:serve": "tsx scripts/local-dev.ts start",
+    "local:worker": "tsx scripts/local-dev.ts worker"
+  },
+  "dependencies": {
+    "@google/genai": "2.26.0",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.2",
+    "cron-parser": "^5.5.0",
+    "lucide-react": "^0.577.0",
+    "next": "16.3.8",
+    "pdf-parse": "^2.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prettier": "3.9.9",
+    "supabase": "2.119.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module"
+}
