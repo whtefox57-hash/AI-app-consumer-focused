@@ -396,6 +396,17 @@ test("schedules stay disabled with no fabricated runs, community contains only g
   assert.equal((await api<CommunityBoot>("community/boot")).posts.length, 0);
 });
 
+test("incomplete saved state is rejected before rendering and remains intact for recovery", async () => {
+  const { api, records } = fixture();
+  await api("boot");
+  const state = JSON.parse(records.get(PREVIEW_STORAGE_KEY)!);
+  delete state.boot.memberships;
+  const damaged = JSON.stringify(state);
+  records.set(PREVIEW_STORAGE_KEY, damaged);
+  await assert.rejects(api("boot"), /saved preview could not be read/);
+  assert.equal(records.get(PREVIEW_STORAGE_KEY), damaged);
+});
+
 test("failed browser writes surface an error without reporting unsaved edits as durable", async () => {
   const fixtureValue = fixture();
   const api = fixtureValue.api;

@@ -24,6 +24,7 @@ import {
   type CommunityProfile,
 } from "./community-types";
 import type { Agent, Boot, Document, Job, Message, Workflow } from "./types";
+import { isTemporaryPreview } from "./preview-mode";
 
 export const PREVIEW_STORAGE_KEY = "cast.design-preview.v1";
 const PREVIEW_DATABASE = "cast-design-preview-files-v1";
@@ -199,16 +200,43 @@ export function createPreviewApi(dependencies: PreviewDependencies) {
       const state = JSON.parse(raw) as PreviewState;
       if (
         state.version !== 1 ||
+        typeof state.boot?.user?.id !== "string" ||
+        !state.boot?.profile?.settings ||
+        !state.boot?.capabilities ||
         !Array.isArray(state.boot?.agents) ||
         !Array.isArray(state.boot?.projects) ||
+        ![
+          "memberships",
+          "messages",
+          "documents",
+          "jobs",
+          "inbox",
+          "usage",
+        ].every((key) => Array.isArray(state.boot[key as keyof Boot])) ||
         !state.community ||
+        ![
+          "profiles",
+          "networks",
+          "members",
+          "posts",
+          "replies",
+          "reactions",
+          "invitations",
+          "connections",
+          "events",
+          "resources",
+          "layouts",
+          "suggestions",
+        ].every((key) =>
+          Array.isArray(state.community[key as keyof CommunityBoot]),
+        ) ||
         !Array.isArray(state.files)
       )
         throw new Error();
       return state;
     } catch {
       throw new Error(
-        "The saved preview could not be read. Export or clear this site's preview data in browser settings before starting again.",
+        "The saved preview could not be read. Open a temporary preview to keep exploring without changing your saved data.",
       );
     }
   }
@@ -1260,6 +1288,36 @@ function browserFiles(): PreviewFiles {
   };
 }
 let browserPreview: ReturnType<typeof createPreviewApi> | undefined;
+function temporaryDependencies(): Pick<
+  PreviewDependencies,
+  "storage" | "files"
+> {
+  const records = new Map<string, string>();
+  const blobs = new Map<string, Blob>();
+  return {
+    storage: {
+      getItem: (key) => records.get(key) ?? null,
+      setItem: (key, value) => {
+        records.set(key, value);
+      },
+      removeItem: (key) => {
+        records.delete(key);
+      },
+    },
+    files: {
+      put: async (path, blob) => {
+        blobs.set(path, blob);
+      },
+      get: async (path) => blobs.get(path),
+      remove: async (path) => {
+        blobs.delete(path);
+      },
+      clear: async () => {
+        blobs.clear();
+      },
+    },
+  };
+}
 export function previewApi<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -1270,8 +1328,9 @@ export function previewApi<T = unknown>(
     );
   try {
     browserPreview ??= createPreviewApi({
-      storage: window.localStorage,
-      files: browserFiles(),
+      ...(isTemporaryPreview()
+        ? temporaryDependencies()
+        : { storage: window.localStorage, files: browserFiles() }),
       backgrounds: { get: getBackground, remove: removeBackground },
     });
   } catch {

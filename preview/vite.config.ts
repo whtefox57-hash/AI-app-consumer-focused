@@ -12,5 +12,5 @@ export default defineConfig({
     "process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(""),
   },
   server: { fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] } },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: { target: "es2020", outDir: "dist", emptyOutDir: true },
 });

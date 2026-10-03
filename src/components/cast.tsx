@@ -44,6 +44,8 @@ import { WorkflowStudio } from "./workflow-studio";
 import { CommunityView } from "./community";
 import WorldMap from "./world-map";
 import { assetPath } from "@/lib/assets";
+import { isTemporaryPreview } from "@/lib/preview-mode";
+import { PreviewRecovery } from "./preview-recovery";
 import {
   getBackground,
   removeBackground,
@@ -124,6 +126,7 @@ export function Cast({
   configured: boolean;
   designPreview?: boolean;
 }) {
+  const temporaryPreview = designPreview && isTemporaryPreview();
   const [data, setData] = useState<Boot | null>(null);
   const [view, setView] = useState<"chat" | "feed" | "networks" | "map">(
     "chat",
@@ -371,7 +374,7 @@ export function Cast({
         });
         await reload();
         throw new Error(
-          "Your message is saved in this design preview. Real AI replies need the connected app; no answer has been simulated.",
+          `${temporaryPreview ? "Your message was added to this temporary preview; it lasts until reload." : "Your message is saved in this design preview."} Real AI replies need the connected app; no answer has been simulated.`,
         );
       }
       const response = await fetch("/api/chat", {
@@ -514,6 +517,7 @@ export function Cast({
         <p>Opening your workspace…</p>
       </main>
     );
+  if (designPreview && !data) return <PreviewRecovery message={error} />;
   if (!data)
     return (
       <main className="auth-wrap">
@@ -1401,7 +1405,9 @@ export function Cast({
               </span>
               <span>
                 {designPreview
-                  ? "Preview: edits stay on this device"
+                  ? temporaryPreview
+                    ? "Temporary: changes last until reload"
+                    : "Preview: edits stay on this device"
                   : "AI can make mistakes. Check important details."}
               </span>
             </div>
@@ -1445,7 +1451,8 @@ export function Cast({
           onClick={() => setPanel("preview-info")}
         >
           <span />
-          Design preview <ChevronRight size={12} />
+          {temporaryPreview ? "Temporary preview" : "Design preview"}{" "}
+          <ChevronRight size={12} />
         </button>
       )}
       {petVisiting && (
@@ -1470,7 +1477,10 @@ export function Cast({
         >
           <p>
             Create agents, projects, notes, workflows, networks, posts, and map
-            places. Your changes are saved in this browser and survive refresh.
+            places.{" "}
+            {temporaryPreview
+              ? "Changes in this temporary preview last until you reload or close the page. Export anything you want to keep."
+              : "Your changes are saved in this browser and survive refresh."}
           </p>
           <p>
             Real AI responses, account sign-in, background jobs, voice calls,
@@ -1527,7 +1537,11 @@ export function Cast({
                     const value = await saveBackground(data.user.id, file);
                     installBackground(value);
                     await saveSettings({ backgroundScene: "custom" });
-                    setNotice("Background saved on this device.");
+                    setNotice(
+                      temporaryPreview
+                        ? "Background applied for this temporary preview."
+                        : "Background saved on this device.",
+                    );
                   } catch (error) {
                     setError(
                       error instanceof Error
@@ -1541,8 +1555,11 @@ export function Cast({
             />
           </label>
           <p className="small">
-            Up to 25 MB. Custom backgrounds stay on this device. Videos play
-            muted; reduced-motion mode shows playback controls.
+            Up to 25 MB.{" "}
+            {temporaryPreview
+              ? "Temporary backgrounds last until reload."
+              : "Custom backgrounds stay on this device."}{" "}
+            Videos play muted; reduced-motion mode shows playback controls.
           </p>
           {customBackground && (
             <div className="scene-uploaded">
@@ -2477,7 +2494,9 @@ export function Cast({
                 });
                 setNotice(
                   designPreview
-                    ? "Settings saved on this device."
+                    ? temporaryPreview
+                      ? "Settings applied until reload."
+                      : "Settings saved on this device."
                     : "Settings saved across your devices.",
                 );
               });

@@ -12,6 +12,11 @@ const allowed = new Set([
   "video/mp4",
   "video/webm",
 ]);
+let temporary = false;
+const temporaryBackgrounds = new Map<string, CustomBackground>();
+export function setTemporaryBackgrounds(enabled: boolean) {
+  temporary = enabled;
+}
 function database(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("cast-backgrounds", 1);
@@ -52,11 +57,16 @@ async function store<T>(
   });
 }
 export function getBackground(owner: string) {
+  if (temporary) return Promise.resolve(temporaryBackgrounds.get(owner));
   return store<CustomBackground | undefined>(owner, false, (table) =>
     table.get(owner),
   );
 }
 export function removeBackground(owner: string) {
+  if (temporary) {
+    temporaryBackgrounds.delete(owner);
+    return Promise.resolve(undefined);
+  }
   return store<undefined>(owner, true, (table) => table.delete(owner));
 }
 export async function saveBackground(owner: string, file: File) {
@@ -69,6 +79,8 @@ export async function saveBackground(owner: string, file: File) {
     name: file.name.slice(0, 200),
     type: file.type.startsWith("video/") ? "video" : "image",
   };
-  await store<IDBValidKey>(owner, true, (table) => table.put(value, owner));
+  if (temporary) temporaryBackgrounds.set(owner, value);
+  else
+    await store<IDBValidKey>(owner, true, (table) => table.put(value, owner));
   return value;
 }

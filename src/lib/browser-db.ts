@@ -1,9 +1,12 @@
 "use client";
 import { createBrowserClient } from "@supabase/ssr";
 import { previewApi } from "./preview-store";
+import { isTemporaryPreview } from "./preview-mode";
+import { setTemporaryBackgrounds } from "./background-store";
 let designPreview = false;
 export function setDesignPreview(enabled: boolean) {
   designPreview = enabled;
+  setTemporaryBackgrounds(enabled && isTemporaryPreview());
 }
 export function browserDb() {
   if (designPreview)

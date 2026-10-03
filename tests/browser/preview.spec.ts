@@ -18,6 +18,176 @@ async function start(page: Page) {
   await expect(page.getByLabel("Message your cast")).toBeVisible();
 }
 
+test("damaged saved previews show recovery and temporary mode preserves the original data", async ({
+  page,
+}) => {
+  await start(page);
+  const saved = await page.evaluate((key) => {
+    const value = JSON.parse(localStorage.getItem(key)!);
+    delete value.boot.memberships;
+    const damaged = JSON.stringify(value);
+    localStorage.setItem(key, damaged);
+    localStorage.setItem("unrelated-preview-data", "keep");
+    return damaged;
+  }, PREVIEW_STORAGE_KEY);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Let’s reopen your preview." }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "saved preview could not be read",
+  );
+  await expect(
+    page.getByRole("button", { name: "Sign in", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("link", { name: "Open a temporary preview", exact: true })
+    .click();
+  await expect(page.getByLabel("Message your cast")).toBeVisible();
+  await expect(page.locator(".scene-preview-badge")).toHaveText(
+    /Temporary preview/,
+  );
+  await page.getByLabel("Message your cast").fill("My temporary thought");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page.locator(".message-text").filter({ hasText: "My temporary thought" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      (key) => localStorage.getItem(key),
+      PREVIEW_STORAGE_KEY,
+    ),
+  ).toBe(saved);
+  expect(
+    await page.evaluate(() => localStorage.getItem("unrelated-preview-data")),
+  ).toBe("keep");
+  await page.reload();
+  await expect(page.getByLabel("Message your cast")).toBeVisible();
+  await expect(
+    page.getByText("My temporary thought", { exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      (key) => localStorage.getItem(key),
+      PREVIEW_STORAGE_KEY,
+    ),
+  ).toBe(saved);
+});
+
+test("temporary preview works with browser storage blocked, including actual files and custom backgrounds", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    for (const key of ["localStorage", "indexedDB"])
+      Object.defineProperty(window, key, {
+        get() {
+          throw new DOMException("Storage blocked", "SecurityError");
+        },
+      });
+  });
+  await page.goto(origin);
+  await expect(
+    page.getByRole("heading", { name: "Let’s reopen your preview." }),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: "Open a temporary preview", exact: true })
+    .click();
+  await expect(page.getByLabel("Message your cast")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Project knowledge", exact: true })
+    .click();
+  const original = "An actual file in the temporary workspace.";
+  await page
+    .getByRole("dialog")
+    .locator("input[type=file]")
+    .setInputFiles({
+      name: "temporary-evidence.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from(original),
+    });
+  const file = page
+    .locator(".document-list>div")
+    .filter({ hasText: "temporary-evidence.txt" });
+  await expect(file).toBeVisible();
+  const downloaded = page.waitForEvent("download");
+  await file
+    .getByRole("button", { name: "Download original", exact: true })
+    .click();
+  expect(await readFile((await (await downloaded).path())!, "utf8")).toBe(
+    original,
+  );
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Customize scene", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .locator("input[type=file]")
+    .setInputFiles({
+      name: "temporary-background.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+  await expect(page.getByRole("status")).toContainText(
+    "Background applied for this temporary preview",
+  );
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "World map", exact: true }).click();
+  await expect(page.locator(".map-country")).toHaveCount(242);
+  await page.getByLabel("Search places and historical events").fill("Kyoto");
+  await expect(
+    page.getByRole("listbox", { name: "Search results" }),
+  ).toContainText("Kyoto");
+  expect(errors).toEqual([]);
+});
+
+test("failed app downloads keep a visible retry screen and recover when the bundle becomes available", async ({
+  page,
+}) => {
+  await page.route("**/assets/app-*.js", (route) => route.abort());
+  await page.goto(origin);
+  await expect(page.locator("#cast-startup-title")).toHaveText(
+    "Let’s reopen your preview.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Try again", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Open in your browser", exact: true }),
+  ).toBeVisible();
+  await page.unroute("**/assets/app-*.js");
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.getByLabel("Message your cast")).toBeVisible();
+  await expect(page.locator("#cast-startup")).toBeHidden();
+});
+
+test("unexpected render failures display recovery rather than an empty root", async ({
+  page,
+}) => {
+  await start(page);
+  await page.evaluate((key) => {
+    const value = JSON.parse(localStorage.getItem(key)!);
+    value.boot.agents[0].avatar = null;
+    localStorage.setItem(key, JSON.stringify(value));
+  }, PREVIEW_STORAGE_KEY);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Let’s reopen your preview." }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "Something interrupted this preview",
+  );
+  await page
+    .getByRole("link", { name: "Open a temporary preview", exact: true })
+    .click();
+  await expect(page.getByLabel("Message your cast")).toBeVisible();
+});
+
 test("static preview preserves actual messages, repeated agent edits, and selected workflow assignments without generating replies", async ({
   page,
 }) => {
